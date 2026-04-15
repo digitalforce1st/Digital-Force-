@@ -155,6 +155,75 @@ async def skillforge_node(state: AgentState) -> dict:
     web_solution = await search_for_solution(error_summary, context="social media publishing python")
     logger.info(f"[SkillForge] Web solution context: {web_solution[:300]}...")
 
+    # ── Step 2b: Detect if the solution requires a new API credential ─────────
+    api_check_prompt = f"""
+The following error occurred in a social media AI agent:
+{error_summary}
+
+Web research found this potential solution:
+{web_solution[:1000]}
+
+Does the BEST solution require a new API key or external service that might not be configured yet?
+Respond with JSON only:
+{{
+  "needs_new_api": true or false,
+  "api_name": "Name of the API/service (e.g. 'Mastodon API', 'Twilio', 'OpenAI DALL-E')",
+  "signup_url": "https://...",
+  "is_free": true or false,
+  "why_needed": "1-2 sentence plain-English explanation of why this API is the best solution",
+  "can_proceed_without": true or false,
+  "alternative_approach": "Brief description of a lower-capability alternative that doesn't need the API, or null"
+}}
+"""
+    try:
+        api_check = await generate_json(api_check_prompt)
+    except Exception:
+        api_check = {"needs_new_api": False}
+
+    user_id = state.get("created_by")
+    goal_id = state.get("goal_id")
+
+    if api_check.get("needs_new_api") and not api_check.get("can_proceed_without"):
+        # Notify via chat AND email
+        api_name = api_check.get("api_name", "an external API")
+        signup_url = api_check.get("signup_url", "")
+        is_free = api_check.get("is_free", False)
+        why = api_check.get("why_needed", "")
+        free_note = "✅ Free tier available" if is_free else "⚠️ May require a paid plan"
+
+        chat_msg = (
+            f"🔑 I found a solution for the roadblock, but it requires a new credential: **{api_name}**\n\n"
+            f"Why: {why}\n\n"
+            f"{free_note}\n"
+            f"Sign up here: {signup_url}\n\n"
+            f"Once you add the key in **Settings → Integrations**, I'll automatically retry this task. "
+            f"I've also sent you an email with this info."
+        )
+        if user_id:
+            await chat_push(user_id, chat_msg, "skillforge", goal_id)
+
+        from agent.tools.email_notify import notify_api_key_needed
+        await notify_api_key_needed(
+            capability=error_summary[:80],
+            api_name=api_name,
+            signup_url=signup_url,
+            why_needed=why,
+            is_free=is_free,
+        )
+
+        from langgraph.graph import END
+        return {
+            "messages": [{"role": "skillforge", "content": f"Paused — API key needed: {api_name}"}],
+            "next_agent": END,
+        }
+
+    # If an alternative exists even without the API, proceed with that
+    if api_check.get("needs_new_api") and api_check.get("alternative_approach"):
+        alt = api_check.get("alternative_approach", "")
+        logger.info(f"[SkillForge] API needed but alternative exists: {alt}")
+        # Inject alternative into the web solution context
+        web_solution = f"PREFERRED APPROACH (no new API needed): {alt}\n\n" + web_solution
+
     # ── Step 3: Analyze + design the new skill (with web context) ─────────────
     analysis_prompt = f"""
 A social media AI agent encountered failures:
@@ -264,6 +333,13 @@ Return a dict with a "success" key always.
             )
             if user_id:
                 await chat_push(user_id, msg, "skillforge", state.get("goal_id"))
+                # Also email for high-risk
+                from agent.tools.email_notify import notify_high_risk_approval
+                await notify_high_risk_approval(
+                    action_description=skill_spec.get("display_name", skill_name),
+                    risk_reason=summary,
+                    skill_name=skill_name,
+                )
 
             from langgraph.graph import END
             return {
