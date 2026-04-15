@@ -43,7 +43,7 @@ Your behaviour rules:
   - Reference prior messages naturally — you have full memory of this conversation
 
 Response format:
-  You will produce responses in two distinct parts, separated by the marker: [BUBBLE_BREAK]
+  You will produce responses in two distinct parts, separated by the marker: ===BREAK===
   Part 1: Brief acknowledgment of what you understood (1-3 sentences max)
   Part 2: The action or answer (detail, what's happening next, what you found)
   If the response naturally fits in one part, omit the marker.
@@ -172,7 +172,7 @@ CONVERSATION RULES:
     msg_lower = message.lower()
     create_kw   = ["create", "launch", "start", "build", "new campaign", "post", "publish", "run", "make", "set up"]
     status_kw   = ["status", "how is", "update", "progress", "overview", "report", "what's happening", "show me"]
-    approve_kw  = ["approve", "looks good", "go ahead", "execute", "yes do it", "confirm"]
+    approve_kw  = ["approve", "looks good", "go ahead", "execute", "yes do it", "confirm", "do it", "retry", "yes"]
     replan_kw   = ["replan", "change strategy", "pivot", "adjust", "rethink", "not working"]
 
     if any(k in msg_lower for k in create_kw):
@@ -187,14 +187,13 @@ CONVERSATION RULES:
     # ── 6. Stream LLM response with bubbles ───────────────────────────────
     full_response = ""
     current_bubble_id = str(uuid.uuid4())
-    current_bubble_content = ""
     bubble_count = 0
 
     yield {"type": "bubble_start", "bubble_id": current_bubble_id}
     bubble_count += 1
 
     try:
-        marker = "[BUBBLE_BREAK]"
+        marker = "===BREAK==="
         buffer = ""
 
         async for token in stream_chat_with_history(
@@ -205,17 +204,27 @@ CONVERSATION RULES:
         ):
             buffer += token
 
-            if marker in buffer:
+            # We also check for marker with newlines attached that the LLM might generate
+            if marker in buffer or "===BREAK" in buffer and len(buffer) > len("===BREAK") + 5:
+                # If we loosely matched ===BREAK (e.g. ===BREAKThe), force clean it
+                clean_before = buffer.split("===BREAK")[0]
+                
                 # Marker found! Close current bubble
                 yield {"type": "bubble_end", "bubble_id": current_bubble_id}
                 
                 # Take everything before the marker, just in case
-                clean_before = buffer.replace(marker, "")
                 if clean_before:
                     full_response += clean_before
                     yield {"type": "message", "content": clean_before, "bubble_id": current_bubble_id}
 
-                buffer = ""
+                # We flush the buffer but keep whatever came AFTER the break marker
+                after_marker = ""
+                if marker in buffer:
+                    after_marker = buffer.split(marker)[-1]
+                else:
+                    after_marker = buffer.split("===BREAK")[-1].lstrip("=")
+
+                buffer = after_marker.lstrip() # remove leading spaces/newlines from the second bubble
                 await asyncio.sleep(0.4)
 
                 # Start next bubble
