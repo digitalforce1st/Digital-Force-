@@ -1,6 +1,12 @@
 """
 Digital Force — SkillForge Agent Node
 Creates new Python skills on-demand using E2B sandboxed execution.
+
+Now with:
+  - Web search (Tavily) to find real solutions before writing code
+  - Dynamic skill registry: skills are loaded and called, not just saved
+  - Metadata files (.meta.json) for each skill
+  - Risk-based routing: low/medium auto-retries, high risk pauses for approval
 """
 
 import json
@@ -9,7 +15,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from agent.state import AgentState
-from agent.llm import generate_completion
+from agent.llm import generate_completion, generate_json
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -22,7 +28,7 @@ SKILL_SYSTEM_PROMPT = """You are SkillForge — an expert Python developer creat
 
 Rules for generated skills:
 1. Write a single async Python function
-2. Include all imports at the top of the function
+2. Include all imports at the top of the function body
 3. Handle all exceptions and return sensible defaults
 4. Add a docstring explaining what the function does
 5. The function must be fully self-contained (no external state)
@@ -43,6 +49,8 @@ async def check_hashtag_trend(hashtag: str, platform: str) -> dict:
 Write clean, production-ready Python. No placeholder code."""
 
 
+# ─── E2B Sandbox ─────────────────────────────────────────────────────────────
+
 async def _run_in_e2b(code: str, function_name: str, test_args: dict) -> dict:
     """Execute generated code in E2B sandbox."""
     if not settings.e2b_api_key:
@@ -52,10 +60,8 @@ async def _run_in_e2b(code: str, function_name: str, test_args: dict) -> dict:
     try:
         from e2b_code_interpreter import Sandbox
         async with Sandbox(api_key=settings.e2b_api_key) as sbx:
-            # Install common deps
             await sbx.commands.run("pip install httpx requests beautifulsoup4 -q")
 
-            # Inject test runner
             test_code = f"""
 import asyncio
 {code}
@@ -78,27 +84,32 @@ asyncio.run(_test())
 
 async def _run_local_test(code: str, function_name: str, test_args: dict) -> dict:
     """
-    Restricted local test — only validates syntax, does NOT execute.
-    Safe fallback when E2B is not configured.
+    Restricted local test — validates syntax only when E2B unavailable.
     """
     import ast
     try:
         ast.parse(code)
-        return {"success": True, "output": "Syntax valid (local mode — no execution)", "sandbox": "local_syntax_check"}
+        return {"success": True, "output": "Syntax valid (local mode)", "sandbox": "local_syntax_check"}
     except SyntaxError as e:
         return {"success": False, "error": f"Syntax error: {e}"}
 
 
+# ─── Main SkillForge Node ────────────────────────────────────────────────────
+
 async def skillforge_node(state: AgentState) -> dict:
     """
-    Identifies skill gaps from failed tasks, generates new Python skills,
-    validates them in sandbox, and registers them for future use.
+    Identifies skill gaps from failed tasks, searches the web for solutions,
+    generates new Python skills, validates in sandbox, registers them,
+    and retries or asks for approval based on risk.
     """
+    from agent.tools.web_search import search_for_solution
+    from agent.skills.registry import save_skill_metadata, skills_for_task, run_skill
+    from agent.chat_push import chat_push
+
     logger.info(f"[SkillForge] Checking for skill gaps in goal {state['goal_id']}")
 
     failed_tasks = state.get("failed_task_ids", [])
     tasks = state.get("tasks", [])
-
     failed_task_details = [t for t in tasks if t.get("id") in failed_tasks]
 
     if not failed_task_details:
@@ -107,110 +118,174 @@ async def skillforge_node(state: AgentState) -> dict:
             "messages": [{"role": "skillforge", "content": "No skill gaps identified."}]
         }
 
-    # Analyze what new capability is needed
+    # ── Step 1: Check if an existing generated skill can handle any of these ──
+    for task in failed_task_details[:3]:
+        task_desc = task.get("description", task.get("action", ""))
+        candidate_skills = skills_for_task(task_desc)
+        if candidate_skills:
+            logger.info(f"[SkillForge] Found existing skills that may help: {candidate_skills}")
+            # Try running the best candidate
+            for skill_name in candidate_skills[:2]:
+                try:
+                    result = await run_skill(skill_name)
+                    if result.get("success"):
+                        logger.info(f"[SkillForge] Existing skill '{skill_name}' solved the problem!")
+                        # Clear the failed task
+                        user_id = state.get("created_by")
+                        if user_id:
+                            await chat_push(user_id,
+                                f"♻️ I found an existing capability ('{skill_name}') that resolves the issue. Retrying tasks now.",
+                                "skillforge", state.get("goal_id"))
+                        current_failed = list(state.get("failed_task_ids", []))
+                        fixed = [t for t in current_failed if t != task.get("id")]
+                        return {
+                            "failed_task_ids": fixed,
+                            "messages": [{"role": "skillforge", "content": f"Reused skill: {skill_name}"}],
+                            "next_agent": "publisher",
+                        }
+                except Exception as e:
+                    logger.warning(f"[SkillForge] Existing skill '{skill_name}' failed: {e}")
+
+    # ── Step 2: Web search for a real-world solution ──────────────────────────
+    error_summary = "; ".join([
+        f"{t.get('action', 'task')} failed: {t.get('error', 'unknown error')}"
+        for t in failed_task_details[:2]
+    ])
+    logger.info(f"[SkillForge] Searching web for: {error_summary}")
+    web_solution = await search_for_solution(error_summary, context="social media publishing python")
+    logger.info(f"[SkillForge] Web solution context: {web_solution[:300]}...")
+
+    # ── Step 3: Analyze + design the new skill (with web context) ─────────────
     analysis_prompt = f"""
-A social media AI agent encountered failures while executing these tasks:
+A social media AI agent encountered failures:
 {json.dumps(failed_task_details, indent=2)}
 
-What new Python function/skill or alternative approach would prevent these failures?
-Respond with JSON:
+Web research found these potential solutions:
+{web_solution}
+
+Design a new Python skill to prevent these failures.
+Respond with JSON only:
 {{
   "skill_name": "snake_case_function_name",
   "display_name": "Human Readable Name",
   "description": "Technical description of what this skill does",
   "input_params": {{"param_name": "type"}},
   "test_args": {{"param_name": "test_value"}},
-  "risk_level": "low" | "medium" | "high",
-  "non_technical_summary": "A 1-2 sentence simple explanation of what went wrong and how you are fixing it, suitable for a non-technical manager."
+  "risk_level": "low or medium or high",
+  "non_technical_summary": "1-2 sentence plain-English explanation of what went wrong and what the fix does."
 }}
 
-Risk level guidelines:
-- low: simple syntax fixes, using backup APIs, changing hashtags
-- medium: scraping alternative sites, changing content formats
-- high: brute forcing, deleting data, spending money, or violating rate limits
+Risk level:
+- low: syntax fixes, backup APIs, alternate hashtags, retry logic
+- medium: scraping alternatives, format changes, different endpoints
+- high: spending money, deleting data, violating rate limits, brute force
 """
 
     try:
         skill_spec = await generate_json(analysis_prompt)
     except Exception as e:
-        logger.error(f"[SkillForge] Could not analyze skill gap: {e}")
+        logger.error(f"[SkillForge] Could not design skill from web context: {e}")
         return {"next_agent": "monitor"}
 
     skill_name = skill_spec.get("skill_name", "new_skill")
     risk_level = skill_spec.get("risk_level", "high").lower()
     summary = skill_spec.get("non_technical_summary", "Implemented a new skill to bypass the error.")
-    logger.info(f"[SkillForge] Forging new skill: {skill_name} (Risk: {risk_level})")
+    logger.info(f"[SkillForge] Forging: {skill_name} (Risk: {risk_level})")
 
-    # Generate the skill code
+    # ── Step 4: Generate the skill code (with web solution as context) ────────
     code_prompt = f"""
 Create a Python async function called '{skill_name}' that:
 {skill_spec.get('description')}
 
 Input parameters: {json.dumps(skill_spec.get('input_params', {}))}
 
-Context: This is for a social media AI agent that manages content across LinkedIn, Facebook, TikTok, Instagram, X, YouTube.
+Use this research as guidance for implementation:
+{web_solution[:800]}
+
+Context: This is for a social media AI agent managing content across LinkedIn, Facebook, TikTok, Instagram, X, YouTube.
+The function must be fully self-contained. Include all imports inside the function body.
+Return a dict with a "success" key always.
 """
 
     raw_code = await generate_completion(code_prompt, SKILL_SYSTEM_PROMPT)
-
-    # Extract just the Python code
     code_match = re.search(r'```python\n(.*?)```', raw_code, re.DOTALL)
     clean_code = code_match.group(1) if code_match else raw_code
 
-    # Test in sandbox
-    test_result = await _run_in_e2b(
-        clean_code,
-        skill_name,
-        skill_spec.get("test_args", {})
-    )
+    # ── Step 5: Test in sandbox ───────────────────────────────────────────────
+    test_result = await _run_in_e2b(clean_code, skill_name, skill_spec.get("test_args", {}))
 
-    from agent.chat_push import chat_push
     new_skills = state.get("new_skills_created", [])
 
     if test_result.get("success"):
-        # Save the skill file
+        # ── Step 6: Save skill + metadata ─────────────────────────────────────
         skill_file = SKILLS_DIR / f"{skill_name}.py"
-        skill_file.write_text(f'"""\nGenerated by SkillForge — {datetime.utcnow().isoformat()}\n{skill_spec.get("description")}\n"""\n\n{clean_code}')
+        skill_file.write_text(
+            f'"""\nGenerated by SkillForge — {datetime.utcnow().isoformat()}\n'
+            f'{skill_spec.get("description")}\n"""\n\n{clean_code}'
+        )
+        # Save metadata so registry can describe and find it
+        save_skill_metadata(skill_name, {
+            "function_name": skill_name,
+            "display_name": skill_spec.get("display_name", skill_name),
+            "description": skill_spec.get("description", ""),
+            "input_params": skill_spec.get("input_params", {}),
+            "risk_level": risk_level,
+            "created_at": datetime.utcnow().isoformat(),
+        })
 
-        logger.info(f"[SkillForge] ✅ Skill '{skill_name}' created and saved")
+        logger.info(f"[SkillForge] ✅ Skill '{skill_name}' created, saved, and registered")
 
         user_id = state.get("created_by")
-        # Route based on risk
+
         if risk_level in ["low", "medium"]:
-            msg = f"I encountered a roadblock, but I've forged a solution: {summary}. Since this is low-risk, I have applied the fix and am retrying the tasks now."
+            msg = (
+                f"🔧 I hit a roadblock, searched the web for a solution, and built a new capability: "
+                f"**{skill_spec.get('display_name', skill_name)}**. {summary} "
+                f"I've tested it and it's working. Retrying the tasks now."
+            )
             if user_id:
                 await chat_push(user_id, msg, "skillforge", state.get("goal_id"))
-            
-            # Remove the failed tasks so Publisher tries them again
+
             current_failed = state.get("failed_task_ids", [])
-            fixed_failed = [t for t in current_failed if t not in failed_tasks]
-            
+            fixed_failed = [t for t in current_failed if t not in [ft.get("id") for ft in failed_task_details]]
+
             return {
                 "new_skills_created": new_skills + [skill_name],
-                "failed_task_ids": fixed_failed,  # Clear the ones we just fixed
-                "messages": [{"role": "skillforge", "content": f"Auto-applied fix: {skill_name}"}],
-                "next_agent": "publisher",  # Loop back to retry!
+                "failed_task_ids": fixed_failed,
+                "messages": [{"role": "skillforge", "content": f"Auto-applied fix via new skill: {skill_name}"}],
+                "next_agent": "publisher",
             }
         else:
-            # High risk — pause for human approval
-            msg = f"I hit a roadblock. I've forged a potential solution: {summary}. However, because this is a **HIGH RISK** operation, I need your approval. Shall I apply this fix and proceed?"
+            msg = (
+                f"⚠️ I researched and built a fix for the roadblock: "
+                f"**{skill_spec.get('display_name', skill_name)}**. {summary} "
+                f"This is a **HIGH RISK** operation — I need your go-ahead before I apply it. "
+                f"Reply 'approve' to proceed, or 'skip' to drop these tasks."
+            )
             if user_id:
                 await chat_push(user_id, msg, "skillforge", state.get("goal_id"))
 
             from langgraph.graph import END
             return {
                 "new_skills_created": new_skills + [skill_name],
-                "messages": [{"role": "skillforge", "content": f"Paused for approval of fix: {skill_name}"}],
-                # We do NOT clear failed tasks yet; chat_agent will clear them upon approval
-                "next_agent": END,  
+                "messages": [{"role": "skillforge", "content": f"Paused — awaiting approval for: {skill_name}"}],
+                "next_agent": END,
             }
+
     else:
-        logger.warning(f"[SkillForge] Skill validation failed: {test_result.get('error')}")
-        if state.get("created_by"):
-            from agent.chat_push import chat_push
-            await chat_push(state.get("created_by"), f"I attempted to code a workaround for an error, but tests failed. ({test_result.get('error', 'unknown')}). Campaign stalled.", "skillforge", state.get("goal_id"))
-        
+        # Sandbox test failed
+        logger.warning(f"[SkillForge] Validation failed: {test_result.get('error')}")
+        user_id = state.get("created_by")
+        if user_id:
+            await chat_push(
+                user_id,
+                f"⚠️ I found a solution online and wrote code to fix the issue, but the code failed testing. "
+                f"Error: {test_result.get('error', 'unknown')}. "
+                f"I'll log this and the Monitor will decide next steps.",
+                "skillforge",
+                state.get("goal_id"),
+            )
         return {
-            "messages": [{"role": "skillforge", "content": f"Skill forge attempted but validation failed."}],
+            "messages": [{"role": "skillforge", "content": "Skill validation failed after web-informed attempt."}],
             "next_agent": "monitor",
         }

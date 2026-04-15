@@ -164,13 +164,33 @@ async def publisher_node(state: AgentState) -> dict:
                 profile_id = buffer_profiles[platform]
                 result = await _buffer_post(profile_id, full_text, media_urls, scheduled_for)
             else:
-                # Simulation mode — log but don't actually post
-                result = {
-                    "success": True,
-                    "platform_post_id": f"sim_{platform}_{datetime.utcnow().timestamp():.0f}",
-                    "simulation": True,
-                }
-                logger.info(f"[Publisher] SIMULATION: Would post to {platform}: {full_text[:80]}...")
+                # ── Check skill registry for a generated publishing skill ──────
+                from agent.skills.registry import skills_for_task, run_skill
+                skill_candidates = skills_for_task(f"post to {platform} social media")
+                skill_result = None
+                for skill_name in skill_candidates[:2]:
+                    try:
+                        skill_result = await run_skill(
+                            skill_name,
+                            text=full_text,
+                            platform=platform,
+                            media_urls=media_urls,
+                        )
+                        if skill_result.get("success"):
+                            logger.info(f"[Publisher] Used generated skill '{skill_name}' for {platform}")
+                            result = skill_result
+                            break
+                    except Exception:
+                        pass
+
+                if not skill_result or not skill_result.get("success"):
+                    # Fall back to simulation
+                    result = {
+                        "success": True,
+                        "platform_post_id": f"sim_{platform}_{datetime.utcnow().timestamp():.0f}",
+                        "simulation": True,
+                    }
+                    logger.info(f"[Publisher] SIMULATION: Would post to {platform}: {full_text[:80]}...")
 
             if result["success"]:
                 newly_completed.append(task.get("id", ""))
