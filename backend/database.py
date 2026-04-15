@@ -388,6 +388,43 @@ class ChatMessage(Base):
 
 
 # ═══════════════════════════════════════════════════════════
+# AGENCY SETTINGS — Per-user autonomous mode & brief schedule
+# ═══════════════════════════════════════════════════════════
+
+class AgencySettings(Base):
+    __tablename__ = "agency_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True, unique=True)
+
+    # ── Autonomous mode ───────────────────────────────────────
+    autonomous_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── Timezone & Brief schedule ─────────────────────────────
+    # IANA timezone string e.g. "Africa/Harare", "Europe/London", "America/New_York"
+    timezone: Mapped[str] = mapped_column(String(60), default="UTC")
+
+    # JSON array of brief slot objects:
+    # [{ "id": uuid, "label": "Morning Brief", "time": "08:00",
+    #    "recurrence": "daily"|"weekdays"|"weekly"|"once",
+    #    "date": "YYYY-MM-DD" (for "once" only, else null) }]
+    brief_slots: Mapped[str] = mapped_column(Text, default="[]")
+
+    # ── Industry / brand context (for proactive research) ─────
+    # Inferred from training docs + conversations; editable by user
+    industry: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    brand_voice: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Daemon tracking timestamps ────────────────────────────
+    daemon_last_ran: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_brief_sent: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_proactive_research: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ═══════════════════════════════════════════════════════════
 # DATABASE ENGINE
 # ═══════════════════════════════════════════════════════════
 

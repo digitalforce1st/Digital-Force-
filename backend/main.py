@@ -2,6 +2,7 @@
 Digital Force — Main FastAPI Application
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -22,6 +23,7 @@ from api.skills import router as skills_router
 from api.analytics import router as analytics_router
 from api.settings import router as settings_router
 from api.chat import router as chat_router
+from api.agency import router as agency_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +55,12 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"🧠 LLM cascade: Groq Keys: {[bool(settings.groq_api_key_1), bool(settings.groq_api_key_2), bool(settings.groq_api_key_3)]}")
     logger.info(f"📡 Publishing: Buffer={bool(settings.buffer_access_token)} | Facebook={bool(settings.facebook_access_token)}")
+
+    # 🤖 Start the Agency Daemon — 24/7 autonomous agent heartbeat
+    from agent.agency_daemon import agency_daemon
+    asyncio.create_task(agency_daemon())
+    logger.info("🤖 Agency Daemon scheduled — Digital Force is autonomous")
+
     logger.info("✨ Digital Force is ready.")
 
     yield
@@ -93,6 +101,7 @@ app.include_router(skills_router)
 app.include_router(analytics_router)
 app.include_router(settings_router)
 app.include_router(chat_router)
+app.include_router(agency_router)
 
 
 @app.get("/api/health")

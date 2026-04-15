@@ -267,6 +267,23 @@ const api = {
   stream: {
     goalLogs: (goalId: string) => `${BASE}/api/stream/goal/${goalId}`,
   },
+
+  agency: {
+    get: () => GET<{
+      autonomous_mode: boolean; timezone: string; industry: string; brand_voice: string;
+      brief_slots: { id: string; label: string; time: string; recurrence: string; date?: string }[];
+      daemon_last_ran: string | null; last_brief_sent: string | null; last_proactive_research: string | null;
+    }>('/api/agency'),
+    update: (body: Record<string, unknown>) => PUT<{ status: string }>('/api/agency', body),
+    status: () => GET<{
+      autonomous_mode: boolean; daemon_last_ran: string | null; last_brief_sent: string | null;
+      last_proactive_research: string | null; active_goals: number; active_goal_titles: string[];
+    }>('/api/agency/status'),
+    triggerResearch: () => POST<{ status: string; message: string }>('/api/agency/trigger-research', {}),
+    addBrief: (slot: { label: string; time: string; recurrence: string; date?: string }) =>
+      POST<{ status: string; slot: unknown; all_slots: unknown[] }>('/api/agency/briefs', slot),
+    deleteBrief: (slotId: string) => DEL<{ status: string; all_slots: unknown[] }>(`/api/agency/briefs/${slotId}`),
+  },
 }
 
 export default api
