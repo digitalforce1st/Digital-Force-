@@ -186,6 +186,43 @@ async def list_knowledge(db: AsyncSession = Depends(get_db), user: dict = Depend
     } for i in items]
 
 
+@router.get("/{item_id}")
+async def get_knowledge_item(
+    item_id: str, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)
+):
+    item = await db.get(KnowledgeItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    return {
+        "id": item.id, "title": item.title, "source_type": item.source_type,
+        "category": item.category, "processing_status": item.processing_status,
+        "chunk_count": item.chunk_count, "tags": json.loads(item.tags or "[]"),
+        "content_summary": item.content_summary,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+@router.post("/{item_id}/reindex")
+async def reindex_knowledge(
+    item_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Re-run the embedding pipeline for an existing document."""
+    item = await db.get(KnowledgeItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    item.processing_status = "processing"
+    item.chunk_count = 0
+    await db.commit()
+    background_tasks.add_task(
+        _process_knowledge_item, item_id, item.source_type, item.source_path or "",
+        item.title, item.category or "other", json.loads(item.tags or "[]")
+    )
+    return {"status": "processing", "message": "Re-embedding started. Please wait."}
+
+
 @router.delete("/{item_id}")
 async def delete_knowledge(
     item_id: str, db: AsyncSession = Depends(get_db), user: dict = Depends(get_current_user)

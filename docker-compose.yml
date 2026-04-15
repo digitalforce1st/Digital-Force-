@@ -1,0 +1,86 @@
+version: '3.9'
+
+services:
+
+  # ── Qdrant Vector Database ──────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: df_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── FastAPI Backend ─────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: df_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - media_data:/app/media
+      - db_data:/app/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      # Override .env values for containerized networking
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/digitalforce.db
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_LOCAL_PATH=/app/qdrant_data
+      - MEDIA_UPLOAD_DIR=/app/media/uploads
+      - MEDIA_PROCESSED_DIR=/app/media/processed
+      - BASE_URL=http://localhost:8000
+      - FRONTEND_URL=http://localhost:3000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Next.js Frontend ────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: df_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # The API URL used by the browser (NOT the container network)
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  qdrant_data:    # Qdrant vector storage (persistent)
+  media_data:     # Uploaded media files (persistent)
+  db_data:        # SQLite database file (persistent)

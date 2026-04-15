@@ -35,17 +35,17 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_password: Optional[str] = None
 
-    # ── Primary LLM: Groq ─────────────────────────────────
-    groq_api_key: str = ""
+    # ── AI Ecosystem: Groq Cluster (9 Models Cascade) ─────
+    groq_api_key_1: str = ""
+    groq_api_key_2: str = ""
+    groq_api_key_3: str = ""
+    
     groq_primary_model: str = "llama-3.3-70b-versatile"
-    groq_fast_model: str = "llama-3.1-8b-instant"
+    groq_secondary_model: str = "mixtral-8x7b-32768"
+    groq_fallback_model: str = "groq/compound"
+    
     groq_max_tokens: int = 4096
     groq_temperature: float = 0.7
-
-    # ── Reasoning LLM: OpenAI ─────────────────────────────
-    openai_api_key: str = ""
-    openai_reasoning_model: str = "gpt-4o"      # Complex strategy + vision
-    openai_fast_model: str = "gpt-4o-mini"      # Quick tasks
 
     # ── Vector DB: Qdrant ─────────────────────────────────
     qdrant_url: str = ""                          # Cloud: https://xxx.qdrant.io
@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     facebook_api_version: str = "v21.0"
 
     # ── Image Generation ──────────────────────────────────
-    # DALL-E 3 via OpenAI (openai_api_key above)
     stability_api_key: str = ""               # Stable Diffusion alternative
 
     # ── Image Storage ─────────────────────────────────────
@@ -97,7 +96,7 @@ class Settings(BaseSettings):
     skillforge_enabled: bool = True
 
     # ── Web Research ──────────────────────────────────────
-    brave_search_api_key: str = ""            # Brave Search API
+    tavily_api_key: str = ""                  # Tavily Search API
     serpapi_key: str = ""                     # SerpAPI alternative
 
     # ── Agent Configuration ───────────────────────────────

@@ -19,6 +19,9 @@ from api.training import router as training_router
 from api.media import router as media_router
 from api.stream import router as stream_router
 from api.skills import router as skills_router
+from api.analytics import router as analytics_router
+from api.settings import router as settings_router
+from api.chat import router as chat_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +51,7 @@ async def lifespan(app: FastAPI):
     Path(settings.media_processed_dir).mkdir(parents=True, exist_ok=True)
     logger.info("✅ Media directories ready")
 
-    logger.info(f"🧠 LLM: Groq={bool(settings.groq_api_key)} | OpenAI={bool(settings.openai_api_key)}")
+    logger.info(f"🧠 LLM cascade: Groq Keys: {[bool(settings.groq_api_key_1), bool(settings.groq_api_key_2), bool(settings.groq_api_key_3)]}")
     logger.info(f"📡 Publishing: Buffer={bool(settings.buffer_access_token)} | Facebook={bool(settings.facebook_access_token)}")
     logger.info("✨ Digital Force is ready.")
 
@@ -87,6 +90,9 @@ app.include_router(training_router)
 app.include_router(media_router)
 app.include_router(stream_router)
 app.include_router(skills_router)
+app.include_router(analytics_router)
+app.include_router(settings_router)
+app.include_router(chat_router)
 
 
 @app.get("/api/health")
@@ -96,8 +102,9 @@ async def health():
         "service": "Digital Force",
         "version": "1.0.0",
         "llm": {
-            "groq": bool(settings.groq_api_key),
-            "openai": bool(settings.openai_api_key),
+            "groq_1": bool(settings.groq_api_key_1),
+            "groq_2": bool(settings.groq_api_key_2),
+            "groq_3": bool(settings.groq_api_key_3),
         },
         "publishing": {
             "buffer": bool(settings.buffer_access_token),

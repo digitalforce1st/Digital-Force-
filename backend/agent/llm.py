@@ -1,70 +1,77 @@
 """
 Digital Force — Agent LLM Client
-Groq primary, OpenAI fallback. Smart routing for reasoning vs speed.
+9-Model Cascading Router (3 API Keys × 3 Models).
+Strictly uses Groq for massive speed and hyper-resilience against rate-limits.
 """
 
 import json
 import re
 import logging
-from typing import Optional
+from typing import Optional, AsyncGenerator
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def get_groq_llm(model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 4096):
-    from langchain_groq import ChatGroq
-    return ChatGroq(
-        model=model or settings.groq_primary_model,
-        api_key=settings.groq_api_key,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-
-
-def get_openai_llm(model: Optional[str] = None, temperature: float = 0.7):
-    from langchain_openai import ChatOpenAI
-    return ChatOpenAI(
-        model=model or settings.openai_reasoning_model,
-        api_key=settings.openai_api_key,
-        temperature=temperature,
-    )
-
-
-def get_primary_llm(prefer_reasoning: bool = False, temperature: float = 0.7):
-    """Smart LLM selector — reasoning → GPT-4o, speed → Groq."""
-    if prefer_reasoning and settings.openai_api_key:
-        return get_openai_llm(temperature=temperature)
-    elif settings.groq_api_key:
-        return get_groq_llm(temperature=temperature)
-    elif settings.openai_api_key:
-        return get_openai_llm(temperature=temperature)
-    else:
-        raise ValueError("No LLM API key. Set GROQ_API_KEY or OPENAI_API_KEY in .env")
+def _get_cascade_configs():
+    """Return list of (api_key, model_name) tightly ordered for the fallback cascade."""
+    keys = [k for k in [settings.groq_api_key_1, settings.groq_api_key_2, settings.groq_api_key_3] if k]
+    if not keys:
+        raise ValueError("No Groq API keys configured. Set GROQ_API_KEY_1, 2, or 3 in .env")
+        
+    models = [
+        settings.groq_primary_model,      # llama-3.3-70b-versatile
+        settings.groq_secondary_model,    # mixtral-8x7b-32768
+        settings.groq_fallback_model      # groq/compound
+    ]
+    
+    configs = []
+    # Rotate: Key 1 tests all 3 models, then Key 2 tests all 3, then Key 3...
+    for key in keys:
+        for model in models:
+            if model:
+                configs.append((key, model))
+    
+    return configs
 
 
 async def generate_completion(
     prompt: str,
     system_prompt: str = "",
-    prefer_reasoning: bool = False,
+    prefer_reasoning: bool = False, # Maintained for function signature compatibility with existing Graph Nodes
     temperature: float = 0.7,
 ) -> str:
+    """Invokes the LangChain LLM, rotating automatically across 9 models if rate-limits or errors hit."""
     from langchain_core.messages import SystemMessage, HumanMessage
-    llm = get_primary_llm(prefer_reasoning=prefer_reasoning, temperature=temperature)
+    from langchain_groq import ChatGroq
+    
     messages = []
     if system_prompt:
         messages.append(SystemMessage(content=system_prompt))
     messages.append(HumanMessage(content=prompt))
-    try:
-        response = await llm.ainvoke(messages)
-        return response.content
-    except Exception as e:
-        logger.warning(f"Primary LLM failed ({e}), trying fallback...")
-        if settings.groq_api_key and prefer_reasoning:
-            response = await get_groq_llm().ainvoke(messages)
+    
+    configs = _get_cascade_configs()
+    last_error = None
+    
+    for attempt, (api_key, model) in enumerate(configs, 1):
+        try:
+            llm = ChatGroq(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=settings.groq_max_tokens,
+                max_retries=0, # We handle the retries inside this pure Python loop
+            )
+            response = await llm.ainvoke(messages)
             return response.content
-        raise
+            
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[LLM Cascade] Attempt {attempt}/{len(configs)} failed (Key: ...{api_key[-4:]}, Model: {model}): {e}")
+            
+    logger.error(f"[LLM Cascade] CRITICAL: ALL {len(configs)} models failed. Agents are halted. Final error: {last_error}")
+    raise last_error
 
 
 async def generate_json(
@@ -72,8 +79,9 @@ async def generate_json(
     system_prompt: str = "",
     prefer_reasoning: bool = False,
 ) -> dict:
-    """Generate and parse a JSON object from the LLM."""
+    """Generate and natively parse a JSON object from the AI."""
     sys = (system_prompt or "") + "\n\nRESPOND WITH VALID JSON ONLY. No markdown fences, no explanation."
+    # Use low temperature for deterministic JSON structuring
     raw = await generate_completion(prompt, sys, prefer_reasoning=prefer_reasoning, temperature=0.3)
     try:
         return json.loads(raw)
@@ -82,3 +90,58 @@ async def generate_json(
         if match:
             return json.loads(match.group())
         raise ValueError(f"LLM did not return valid JSON: {raw[:300]}")
+
+
+async def stream_chat_response(
+    system: str,
+    user: str,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream tokens safely for the human chat interface using the cascade logic.
+    """
+    from groq import AsyncGroq
+    configs = _get_cascade_configs()
+    last_error = None
+    
+    for attempt, (api_key, model) in enumerate(configs, 1):
+        try:
+            client = AsyncGroq(api_key=api_key, max_retries=0)
+            stream = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                stream=True,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+            return
+            
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[LLM Stream Cascade] Attempt {attempt}/{len(configs)} failed: {e}")
+            
+    logger.error("[LLM Stream Cascade] All Groq API connections failed. Attempting final non-streaming fallback.")
+    
+    # If all Async streams immediately refuse connection, try one last static completion natively
+    full = await generate_completion(user, system, temperature=temperature)
+    for word in full.split(" "):
+        yield word + " "
+
+
+def get_llm_client():
+    from config import get_settings
+    s = get_settings()
+    return {
+        "groq_1": bool(s.groq_api_key_1),
+        "groq_2": bool(s.groq_api_key_2),
+        "groq_3": bool(s.groq_api_key_3),
+        "stream_chat": stream_chat_response,
+    }

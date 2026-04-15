@@ -26,8 +26,30 @@ def _get_client():
 
 
 def _get_embedder():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    """Return best available embedder. Never raises — stubs if nothing available."""
+    # 1. sentence-transformers (preferred)
+    try:
+        from sentence_transformers import SentenceTransformer
+        return SentenceTransformer("all-MiniLM-L6-v2")
+    except ImportError:
+        logger.warning("[RAG] sentence-transformers not installed.")
+
+    # 3. Hash stub (no semantic quality — installs nothing)
+    logger.warning("[RAG] Using hash stub embedder. Install sentence-transformers for real RAG.")
+    import hashlib, struct
+
+    class _Stub:
+        DIMS = 384
+        def encode(self, texts, **_):
+            out = []
+            for t in texts:
+                raw = hashlib.sha256(t.encode()).digest() * 16
+                vec = list(struct.unpack('96f', raw[:384])[:384])
+                s = sum(abs(v) for v in vec) or 1.0
+                out.append([v / s for v in vec])
+            return out
+
+    return _Stub()
 
 
 _embedder = None

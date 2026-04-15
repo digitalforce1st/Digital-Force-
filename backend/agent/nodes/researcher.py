@@ -13,20 +13,24 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def _brave_search(query: str, count: int = 5) -> list[dict]:
-    """Use Brave Search API for web research."""
-    if not settings.brave_search_api_key:
+async def _tavily_search(query: str, count: int = 5) -> list[dict]:
+    """Use Tavily Search API for web research."""
+    if not settings.tavily_api_key:
         return []
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            headers={"Accept": "application/json", "X-Subscription-Token": settings.brave_search_api_key},
-            params={"q": query, "count": count}
+        resp = await client.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": settings.tavily_api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": count
+            }
         )
         if resp.status_code == 200:
             data = resp.json()
-            return [{"title": r.get("title"), "snippet": r.get("description"), "url": r.get("url")}
-                    for r in data.get("web", {}).get("results", [])]
+            return [{"title": r.get("title"), "snippet": r.get("content"), "url": r.get("url")}
+                    for r in data.get("results", [])]
     return []
 
 
@@ -55,7 +59,7 @@ async def researcher_node(state: AgentState) -> dict:
 
     raw_results = []
     for q in queries[:3]:  # Limit to 3 searches
-        results = await _brave_search(q, count=3)
+        results = await _tavily_search(q, count=3)
         raw_results.extend(results)
 
     # Synthesize findings with LLM

@@ -94,24 +94,25 @@ async def parse_url(url: str) -> str:
 
 
 async def parse_image(file_path: str) -> str:
-    """Generate text description of an image using GPT-4o Vision."""
-    if not settings.openai_api_key:
+    """Generate text description of an image using Groq Vision."""
+    key = settings.groq_api_key_1 or settings.groq_api_key_2 or settings.groq_api_key_3
+    if not key:
         return f"Image asset: {Path(file_path).name}"
     try:
         import base64
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        from groq import AsyncGroq
+        client = AsyncGroq(api_key=key)
         with open(file_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         ext = Path(file_path).suffix.lstrip(".").lower()
         media_type = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
         resp = await client.chat.completions.create(
-            model=settings.openai_reasoning_model,
+            model="llama-3.2-90b-vision-preview",
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/{media_type};base64,{b64}"}},
-                    {"type": "text", "text": "Describe this image in detail for a social media context. Include: visual elements, text visible, colors, mood, and how it could be used for marketing."}
+                    {"type": "text", "text": "Describe this image in detail for a social media context. Include: visual elements, text visible, colors, mood, and how it could be used for marketing."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/{media_type};base64,{b64}"}}
                 ]
             }],
             max_tokens=500,

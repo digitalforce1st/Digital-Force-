@@ -44,7 +44,7 @@ async def upload_media(
     )
 
     # Auto-tag with Vision if image
-    if asset_type == "image" and settings.openai_api_key:
+    if asset_type == "image" and (settings.groq_api_key_1 or settings.groq_api_key_2 or settings.groq_api_key_3):
         try:
             from rag.pipeline import parse_image
             description = await parse_image(str(dest))
