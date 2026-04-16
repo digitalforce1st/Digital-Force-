@@ -30,58 +30,78 @@ async def get_analytics_overview(
     """
     try:
         # ── Goal counts ───────────────────────────────────
-        goals_result = await db.execute(select(Goal))
-        goals = goals_result.scalars().all()
-
-        total_goals = len(goals)
-        goals_completed = sum(1 for g in goals if g.status == "complete")
-        goals_executing = sum(1 for g in goals if g.status == "executing")
-        goals_awaiting = sum(1 for g in goals if g.status == "awaiting_approval")
-        goals_planning = sum(1 for g in goals if g.status == "planning")
-        goals_monitoring = sum(1 for g in goals if g.status == "monitoring")
-        goals_failed = sum(1 for g in goals if g.status == "failed")
-
-        # ── Published posts ───────────────────────────────
-        posts_result = await db.execute(select(PublishedPost))
-        posts = posts_result.scalars().all()
-
-        total_posts = len(posts)
-        published_posts = [p for p in posts if p.status == "published"]
-        total_published = len(published_posts)
-
-        # Aggregate engagement
-        total_impressions = sum(p.impressions for p in published_posts)
-        total_likes = sum(p.likes for p in published_posts)
-        total_comments = sum(p.comments for p in published_posts)
-        total_shares = sum(p.shares for p in published_posts)
-        total_reach = sum(p.reach for p in published_posts)
-
-        avg_engagement_rate = (
-            sum(p.engagement_rate for p in published_posts) / len(published_posts)
-            if published_posts else 0.0
+        total_goals = await db.scalar(select(func.count(Goal.id))) or 0
+        
+        goal_status_counts = await db.execute(
+            select(Goal.status, func.count()).group_by(Goal.status)
         )
+        status_distribution = {
+            "planning": 0, "awaiting_approval": 0, "executing": 0,
+            "monitoring": 0, "complete": 0, "failed": 0
+        }
+        for status, count in goal_status_counts:
+            status_distribution[status] = count
+            
+        goals_completed = status_distribution["complete"]
+        goals_executing = status_distribution["executing"]
+        goals_awaiting = status_distribution["awaiting_approval"]
+        goals_planning = status_distribution["planning"]
+        goals_monitoring = status_distribution["monitoring"]
+        goals_failed = status_distribution["failed"]
 
-        # ── Platform breakdown ────────────────────────────
-        import json
+        # ── Published posts stats ───────────────────────────────
+        total_posts = await db.scalar(select(func.count(PublishedPost.id))) or 0
+        
+        post_stats = await db.execute(
+            select(
+                func.count(PublishedPost.id),
+                func.sum(PublishedPost.impressions),
+                func.sum(PublishedPost.likes),
+                func.sum(PublishedPost.comments),
+                func.sum(PublishedPost.shares),
+                func.sum(PublishedPost.reach),
+                func.avg(PublishedPost.engagement_rate)
+            ).where(PublishedPost.status == "published")
+        )
+        pub_count, tot_imp, tot_likes, tot_com, tot_shares, tot_reach, avg_eng = post_stats.first() or (0,0,0,0,0,0,0.0)
+        
+        total_published = pub_count or 0
+        total_impressions = tot_imp or 0
+        total_likes = tot_likes or 0
+        total_comments = tot_com or 0
+        total_shares = tot_shares or 0
+        total_reach = tot_reach or 0
+        avg_engagement_rate = float(avg_eng or 0.0)
+
+        # ── Platform breakdown (Posts) ────────────────────────────
         platform_post_counts: dict[str, int] = {}
         platform_engagement: dict[str, dict] = {}
+        
+        platform_stats = await db.execute(
+            select(
+                PublishedPost.platform,
+                func.count(PublishedPost.id),
+                func.sum(PublishedPost.likes),
+                func.sum(PublishedPost.comments),
+                func.sum(PublishedPost.shares),
+                func.sum(PublishedPost.impressions)
+            ).where(PublishedPost.status == "published").group_by(PublishedPost.platform)
+        )
+        for p_plat, p_count, p_likes, p_com, p_shares, p_imp in platform_stats:
+            plat = p_plat or "unknown"
+            platform_post_counts[plat] = p_count or 0
+            platform_engagement[plat] = {
+                "likes": p_likes or 0, "comments": p_com or 0, 
+                "shares": p_shares or 0, "impressions": p_imp or 0
+            }
 
-        for p in published_posts:
-            plat = p.platform or "unknown"
-            platform_post_counts[plat] = platform_post_counts.get(plat, 0) + 1
-            if plat not in platform_engagement:
-                platform_engagement[plat] = {"likes": 0, "comments": 0, "shares": 0, "impressions": 0}
-            platform_engagement[plat]["likes"] += p.likes
-            platform_engagement[plat]["comments"] += p.comments
-            platform_engagement[plat]["shares"] += p.shares
-            platform_engagement[plat]["impressions"] += p.impressions
-
-        # Also count from goals' platform fields
+        # Also count from goals' platform fields (memory optimized by only selecting platforms)
+        import json
         goal_platform_counts: dict[str, int] = {}
-        for g in goals:
+        goal_platforms_raw = await db.execute(select(Goal.platforms).where(Goal.platforms.is_not(None)))
+        for g_plat in goal_platforms_raw.scalars():
             try:
-                platforms = json.loads(g.platforms or "[]")
-                for plat in platforms:
+                for plat in json.loads(g_plat or "[]"):
                     goal_platform_counts[plat] = goal_platform_counts.get(plat, 0) + 1
             except Exception:
                 pass
@@ -89,10 +109,15 @@ async def get_analytics_overview(
         # ── Posts per day (last 30 days) ──────────────────
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
         posts_by_day: dict[str, int] = {}
-
-        for p in published_posts:
-            if p.published_at and p.published_at >= thirty_days_ago:
-                day_key = p.published_at.strftime("%Y-%m-%d")
+        
+        recent_posts_dates = await db.execute(
+            select(PublishedPost.published_at)
+            .where(PublishedPost.status == "published")
+            .where(PublishedPost.published_at >= thirty_days_ago)
+        )
+        for pub_at in recent_posts_dates.scalars():
+            if pub_at:
+                day_key = pub_at.strftime("%Y-%m-%d")
                 posts_by_day[day_key] = posts_by_day.get(day_key, 0) + 1
 
         # Fill in missing days with 0
@@ -103,36 +128,17 @@ async def get_analytics_overview(
 
         # ── Agent activity (last 7 days) ──────────────────
         seven_days_ago = datetime.utcnow() - timedelta(days=7)
-        logs_result = await db.execute(
-            select(AgentLog)
+        agent_counts_query = await db.execute(
+            select(AgentLog.agent, func.count(AgentLog.id))
             .where(AgentLog.created_at >= seven_days_ago)
-            .order_by(desc(AgentLog.created_at))
+            .group_by(AgentLog.agent)
         )
-        recent_logs = logs_result.scalars().all()
-
-        agent_activity: dict[str, int] = {}
-        for log in recent_logs:
-            agent_activity[log.agent] = agent_activity.get(log.agent, 0) + 1
+        agent_activity = {agent: count for agent, count in agent_counts_query if agent}
 
         # ── Other counts ──────────────────────────────────
-        skills_result = await db.execute(select(func.count()).select_from(GeneratedSkill))
-        skill_count = skills_result.scalar() or 0
-
-        docs_result = await db.execute(select(func.count()).select_from(KnowledgeItem))
-        doc_count = docs_result.scalar() or 0
-
-        media_result = await db.execute(select(func.count()).select_from(MediaAsset))
-        media_count = media_result.scalar() or 0
-
-        # ── Goal status distribution ───────────────────────
-        status_distribution = {
-            "planning": goals_planning,
-            "awaiting_approval": goals_awaiting,
-            "executing": goals_executing,
-            "monitoring": goals_monitoring,
-            "complete": goals_completed,
-            "failed": goals_failed,
-        }
+        skill_count = await db.scalar(select(func.count(GeneratedSkill.id))) or 0
+        doc_count = await db.scalar(select(func.count(KnowledgeItem.id))) or 0
+        media_count = await db.scalar(select(func.count(MediaAsset.id))) or 0
 
         return {
             # Top-level KPIs
@@ -171,7 +177,7 @@ async def get_analytics_overview(
         }
 
     except Exception as e:
-        logger.error(f"[Analytics] Failed to aggregate: {e}")
+        logger.error("Failed to aggregate: %s", str(e), exc_info=True)
         return {
             "total_goals": 0, "goals_completed": 0, "goals_executing": 0,
             "goals_awaiting_approval": 0, "total_posts_published": 0,

@@ -81,7 +81,7 @@ async def delete_media(asset_id: str, db: AsyncSession = Depends(get_db), user: 
         raise HTTPException(404, "Asset not found")
     try:
         Path(asset.file_path).unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("OS Exception when deleting media file %s: %s", asset.file_path, str(e), exc_info=True)
     await db.delete(asset)
     return {"deleted": True}

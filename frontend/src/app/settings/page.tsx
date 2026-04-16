@@ -113,6 +113,11 @@ export default function SettingsPage() {
   })
   const [addingSlot, setAddingSlot] = useState(false)
 
+  // Accounts state
+  const [accounts, setAccounts] = useState<any[]>([])
+  const [addingAccount, setAddingAccount] = useState(false)
+  const [newAccount, setNewAccount] = useState({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
+
   useEffect(() => {
     Promise.all([api.settings.get(), api.settings.status()])
       .then(([settings, st]) => {
@@ -138,6 +143,11 @@ export default function SettingsPage() {
       .then(r => r.json())
       .then(setDaemonStatus)
       .catch(() => {})
+
+    fetch(`${BASE}/api/accounts`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setAccounts(data) })
+      .catch(() => {})
   }, [])
 
   const authHeaders = () => {
@@ -155,7 +165,7 @@ export default function SettingsPage() {
         'buffer_access_token','facebook_page_id','facebook_access_token',
         'qdrant_url','qdrant_api_key','smtp_host','smtp_port','smtp_username',
         'smtp_password','smtp_from_name','smtp_from_email','frontend_url',
-        'cors_origins','agent_max_iterations','agent_timeout_seconds']
+        'cors_origins','agent_max_iterations','agent_timeout_seconds', 'proxy_provider_api']
       for (const key of saveable) {
         if (form[key] !== undefined && !form[key].includes('•')) payload[key] = form[key]
       }
@@ -200,6 +210,30 @@ export default function SettingsPage() {
 
   const handleDeleteSlot = (id: string) => {
     setBriefSlots(prev => prev.filter(s => s.id !== id))
+  }
+
+  const handleAddAccount = async () => {
+    if (!newAccount.platform || !newAccount.display_name || !newAccount.account_label) return
+    try {
+      const res = await fetch(`${BASE}/api/accounts`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(newAccount)
+      })
+      if (res.ok) {
+        const data = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r=>r.json())
+        setAccounts(data)
+        setAddingAccount(false)
+        setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
+      }
+    } catch (e) { setError('Failed to add account') }
+  }
+
+  const handleDeleteAccount = async (id: string) => {
+    try {
+      await fetch(`${BASE}/api/accounts/${id}`, { method: 'DELETE', headers: authHeaders() })
+      setAccounts(prev => prev.filter(a => a.id !== id))
+    } catch(e) {}
   }
 
   const handleTriggerResearch = async () => {
@@ -342,12 +376,83 @@ export default function SettingsPage() {
               <Field id="groq_api_key_2" label="Groq API Key 2 (Fallback)" value={form.groq_api_key_2 || ''} onChange={set('groq_api_key_2')} isSecret placeholder="gsk_..." />
               <Field id="groq_api_key_3" label="Groq API Key 3 (Emergency)" value={form.groq_api_key_3 || ''} onChange={set('groq_api_key_3')} isSecret placeholder="gsk_..." />
             </Section>
-            <Section title="Social Publishing Integrations">
-              <Field id="buffer_access_token" label="Buffer Access Token" value={form.buffer_access_token || ''} onChange={set('buffer_access_token')} isSecret placeholder="buffer_pub_..." hint="buffer.com/developers" />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field id="facebook_page_id" label="Facebook Page ID" value={form.facebook_page_id || ''} onChange={set('facebook_page_id')} placeholder="123456789" />
-                <Field id="facebook_access_token" label="Facebook Access Token" value={form.facebook_access_token || ''} onChange={set('facebook_access_token')} isSecret placeholder="EAA..." />
+            <Section title="Managed Social Accounts (Distribution Swarm)">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                 <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', maxWidth: '70%' }}>Add your target accounts here. The Distribution Manager will auto-provision proxies and route traffic.</div>
+                 <button onClick={() => setAddingAccount(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0.4rem 0.875rem',
+                    borderRadius: 8, background: 'rgba(34,211,238,0.15)', border: '1px solid rgba(34,211,238,0.25)',
+                    color: '#22D3EE', fontSize: '0.8rem', cursor: 'pointer' }}>
+                  <Plus size={13} /> Add Account
+                 </button>
               </div>
+
+              {accounts.length === 0 && !addingAccount && (
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'rgba(255,255,255,0.25)', fontSize: '0.85rem' }}>
+                  No accounts managed yet.
+                </div>
+              )}
+
+              {accounts.map(acc => (
+                  <div key={acc.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', marginBottom: 8 }}>
+                    <div>
+                      <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 500 }}>{acc.display_name} <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem', marginLeft: 6 }}>({acc.account_label})</span></div>
+                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', marginTop: 2 }}>Platform: {acc.platform}</div>
+                    </div>
+                    <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', padding: 4 }}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+              ))}
+
+              {addingAccount && (
+                <div style={{ marginTop: 12, padding: '1rem', borderRadius: 12, background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Platform</label>
+                        <select value={newAccount.platform} onChange={e => setNewAccount(s => ({ ...s, platform: e.target.value }))}
+                          style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none' }}>
+                          <option value="instagram" style={{ background: '#1a1a2e' }}>Instagram</option>
+                          <option value="tiktok" style={{ background: '#1a1a2e' }}>TikTok</option>
+                          <option value="linkedin" style={{ background: '#1a1a2e' }}>LinkedIn</option>
+                          <option value="facebook" style={{ background: '#1a1a2e' }}>Facebook</option>
+                          <option value="twitter" style={{ background: '#1a1a2e' }}>X (Twitter)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Display Name</label>
+                        <input value={newAccount.display_name} onChange={e => setNewAccount(s => ({ ...s, display_name: e.target.value }))}
+                          placeholder="e.g. Acme Corp Official"
+                          style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none' }} />
+                      </div>
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Account Label (Internal)</label>
+                    <input value={newAccount.account_label} onChange={e => setNewAccount(s => ({ ...s, account_label: e.target.value }))}
+                      placeholder="e.g. Burner 1, CEO Personal"
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none' }} />
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Authentication / Truth Bucket (Free Text or JSON)</label>
+                    <textarea value={newAccount.auth_data} onChange={e => setNewAccount(s => ({ ...s, auth_data: e.target.value }))}
+                      placeholder="e.g. Email: user@acme.com&#10;Password: password123&#10;2FA Recovery: 123456" rows={3}
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none', resize: 'vertical' }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button onClick={() => setAddingAccount(false)}
+                      style={{ padding: '0.5rem 1rem', borderRadius: 8, background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>
+                    <button onClick={handleAddAccount} disabled={!newAccount.platform || !newAccount.display_name || !newAccount.account_label}
+                      style={{ padding: '0.5rem 1rem', borderRadius: 8, background: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'linear-gradient(135deg,#06b6d4,#3b82f6)' : 'rgba(255,255,255,0.05)', border: 'none', color: '#fff', fontSize: '0.8rem', cursor: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'pointer' : 'not-allowed' }}>
+                      Save Account
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            </Section>
+            
+            <Section title="Proxy Provider Integration">
+              <Field id="proxy_provider_api" label="Global Proxy Provider API Key" value={form.proxy_provider_api || ''} onChange={set('proxy_provider_api')} isSecret placeholder="e.g. username:password@proxyhost:port OR api_key" hint="If provided, the agency will automatically provision a rotating proxy." />
             </Section>
             <Section title="Vector Database — Qdrant">
               <Field id="qdrant_url" label="Qdrant Cloud URL" value={form.qdrant_url || ''} onChange={set('qdrant_url')} placeholder="https://xxx.qdrant.io" hint="Leave empty to use local storage" />

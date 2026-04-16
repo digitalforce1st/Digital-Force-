@@ -41,7 +41,8 @@ async def executive_node(state: AgentState) -> dict:
     import json
     
     recent_history = [
-        {"role": m.get("role", "user") if isinstance(m, dict) else "user", 
+        {"role": m.get("role", "user") if isinstance(m, dict) and m.get("role") in ["user", "assistant", "system"] else "assistant", 
+         "name": m.get("name") or (m.get("role") if isinstance(m, dict) and m.get("role") not in ["user", "assistant", "system"] else None),
          "content": m.get("content", "") if isinstance(m, dict) else str(m)}
         for m in messages[-4:]
     ]
@@ -55,12 +56,17 @@ Recent context:
 
 Determine if the user is asking you to start a task, create a goal, execute something, or analyze data. If yes, it requires the Manager's attention.
 If the user is approving a previously proposed plan, mark approval_status as "approved". If rejecting, mark "rejected". Otherwise "none".
+If the user is explicitly providing credentials, a password, a 2FA code, or telling you to inherently update the 'Truth Bucket' for an account, provide the account name you detect, and the specific text to append to their auth_data bucket.
 
 Return strictly JSON:
 {{
   "reply": "Your dynamic response to the user, in character.",
   "requires_manager": <boolean>,
-  "approval_status": "approved" | "rejected" | "none"
+  "approval_status": "approved" | "rejected" | "none",
+  "update_truth_bucket": {{
+     "account_name_match": "string matching account name (e.g. 'Acme Corp') or null",
+     "text_to_append": "Exact credential string to append safely to DB (e.g. 'Backup pass: 123') or null"
+  }}
 }}"""
 
     try:
@@ -68,6 +74,29 @@ Return strictly JSON:
         reply = response.get("reply", "Acknowledged.")
         requires_manager = response.get("requires_manager", False)
         approval_status = response.get("approval_status", "none")
+        truth_update = response.get("update_truth_bucket")
+        
+        # Auto-save credentials to database Truth Bucket if detected
+        if truth_update and isinstance(truth_update, dict) and truth_update.get("account_name_match"):
+            account_match = truth_update.get("account_name_match")
+            text_to_append = truth_update.get("text_to_append")
+            if text_to_append:
+                from database import async_session, PlatformConnection
+                from sqlalchemy import select, or_
+                async with async_session() as session:
+                    match_str = f"%{account_match}%"
+                    stmt = select(PlatformConnection).where(
+                        or_(
+                            PlatformConnection.account_label.ilike(match_str),
+                            PlatformConnection.display_name.ilike(match_str)
+                        )
+                    )
+                    conn = (await session.execute(stmt)).scalars().first()
+                    if conn:
+                        current = conn.auth_data or ""
+                        conn.auth_data = f"{current}\n[Agent Auto-Saved Update]: {text_to_append}".strip()
+                        await session.commit()
+                        logger.info(f"[Executive] Successfully updated Truth Bucket for {conn.account_label}")
     except Exception as e:
         logger.error(f"[Executive] NLP parsing failed: {e}")
         reply = "Acknowledged. Routing internal systems to compensate."

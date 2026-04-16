@@ -12,6 +12,7 @@ from agent.nodes.orchestrator import orchestrator_node
 from agent.nodes.researcher import researcher_node
 from agent.nodes.strategist import strategist_node
 from agent.nodes.content_director import content_director_node
+from agent.nodes.distribution_manager import distribution_manager_node
 from agent.nodes.publisher import publisher_node
 from agent.nodes.skillforge import skillforge_node
 from agent.nodes.monitor import monitor_node
@@ -33,7 +34,17 @@ def manager_router(state: AgentState):
         from langgraph.constants import Send
         if uncompleted:
             return [Send("content_director", {**state, "current_task_id": t["id"]}) for t in uncompleted]
-        return "publisher"
+        return "manager"
+        
+    if nxt == "distribution_manager":
+        tasks = state.get("tasks", [])
+        completed = state.get("completed_task_ids", [])
+        failed = state.get("failed_task_ids", [])
+        uncompleted = [t for t in tasks if t.get("task_type") == "post_content" and not t.get("connection_id") and t.get("id") not in completed and t.get("id") not in failed]
+        from langgraph.constants import Send
+        if uncompleted:
+            return [Send("distribution_manager", {**state, "current_task_id": t["id"]}) for t in uncompleted]
+        return "manager"
         
     if not nxt or nxt == "__end__":
         return END
@@ -54,6 +65,7 @@ def build_neural_graph() -> StateGraph:
     graph.add_node("researcher", researcher_node)
     graph.add_node("strategist", strategist_node)
     graph.add_node("content_director", content_director_node)
+    graph.add_node("distribution_manager", distribution_manager_node)
     graph.add_node("publisher", publisher_node)
     graph.add_node("skillforge", skillforge_node)
     graph.add_node("monitor", monitor_node)
@@ -75,6 +87,7 @@ def build_neural_graph() -> StateGraph:
         "researcher": "researcher",
         "strategist": "strategist",
         "content_director": "content_director",
+        "distribution_manager": "distribution_manager",
         "publisher": "publisher",
         "skillforge": "skillforge",
         "monitor": "monitor",
@@ -88,6 +101,7 @@ def build_neural_graph() -> StateGraph:
     graph.add_edge("researcher", "manager")
     graph.add_edge("strategist", "manager")
     graph.add_edge("content_director", "manager")
+    graph.add_edge("distribution_manager", "manager")
     graph.add_edge("publisher", "manager")
     graph.add_edge("skillforge", "manager")
     graph.add_edge("monitor", "manager")

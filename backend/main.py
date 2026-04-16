@@ -2,7 +2,12 @@
 Digital Force — Main FastAPI Application
 """
 
+import sys
 import asyncio
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -24,6 +29,7 @@ from api.analytics import router as analytics_router
 from api.settings import router as settings_router
 from api.chat import router as chat_router
 from api.agency import router as agency_router
+from api.accounts import router as accounts_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -114,6 +120,7 @@ app.include_router(analytics_router)
 app.include_router(settings_router)
 app.include_router(chat_router)
 app.include_router(agency_router)
+app.include_router(accounts_router)
 
 
 @app.get("/api/health")

@@ -104,7 +104,7 @@ async def monitor_node(state: AgentState) -> dict:
     return {
         "kpi_snapshot": kpi_update,
         "needs_replan": needs_replan,
-        "messages": [{"role": "monitor", "content": status_message}],
+        "messages": [{"role": "assistant", "name": "monitor", "content": status_message}],
         "next_agent": "strategist" if needs_replan else ("reflector" if is_complete else "__end__"),
         "replan_count": replan_count + (1 if needs_replan else 0),
     }

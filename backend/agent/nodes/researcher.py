@@ -175,7 +175,7 @@ Return JSON:
         return {
             "research_findings": findings,
             "needs_replanning_research": False,
-            "messages": [{"role": "researcher", "content": f"Live Scraping Succeeded: {len(topics)} topics found."}],
+            "messages": [{"role": "assistant", "name": "researcher", "content": f"Live Scraping Succeeded: {len(topics)} topics found."}],
             "next_agent": "supervisor"
         }
             

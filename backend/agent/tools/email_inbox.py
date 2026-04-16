@@ -80,8 +80,22 @@ async def poll_email_inbox():
         await asyncio.sleep(POLL_INTERVAL_SEC)
 
 
+def _clean_email_body(text: str) -> str:
+    cleaned = []
+    for line in text.split('\n'):
+        line_clean = line.strip().lower()
+        if not line_clean: continue
+        if line_clean.startswith('>'): continue
+        if re.match(r'^on\s+.*wrote:.*$', line_clean): break
+        if re.match(r'^from:\s+.*$', line_clean): break
+        if "original message" in line_clean: break
+        cleaned.append(line_clean)
+    return " ".join(cleaned)
+
 def _check_inbox(host: str):
     """Blocking IMAP check, runs in a thread."""
+    import socket
+    socket.setdefaulttimeout(30)
     try:
         mail = imaplib.IMAP4_SSL(host)
         mail.login(settings.smtp_username, settings.smtp_password)
@@ -101,14 +115,12 @@ def _check_inbox(host: str):
             token = token_match.group(1)
             body = _extract_text_body(msg)
             
-            # Parse approval intent from body (mostly first non-empty line)
-            lines = [l.strip().lower() for l in body.split('\n') if l.strip()]
-            body_head = lines[0] if lines else ""
+            clean_body = _clean_email_body(body)
             
             resolution = None
-            if any(w in body_head for w in ["approve", "go ahead", "yes", "do it"]):
+            if re.search(r'\b(approve|go ahead|yes|do it|approved)\b', clean_body):
                 resolution = "approved"
-            elif any(w in body_head for w in ["skip", "drop", "no"]):
+            elif re.search(r'\b(skip|drop|no|rejected)\b', clean_body):
                 resolution = "skipped"
                 
             if resolution:

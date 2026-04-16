@@ -87,27 +87,28 @@ export default function Sidebar() {
       zIndex: 50,
     }}>
       {/* Brand Identity / Logo */}
-      <div style={{ padding: '2rem 1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
-        <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none' }}>
+      <div style={{ padding: '2.5rem 1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.015)' }}>
+        <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 14, textDecoration: 'none' }}>
           <div style={{
-            width: 36, height: 36, borderRadius: 12,
-            background: 'linear-gradient(135deg, #00A3FF, #006199)',
+            width: 38, height: 38, borderRadius: 10,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 0 24px rgba(0,163,255,0.4)',
-            border: '1px solid rgba(255,255,255,0.1)'
+            background: 'rgba(255,255,255,0.02)',
+            border: '1px solid rgba(255,255,255,0.05)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+            overflow: 'hidden'
           }}>
-            <Zap size={18} color="white" />
+            <img src="/logo.png" alt="Digital Force" style={{ width: 18, height: 18, objectFit: 'contain', opacity: 0.95 }} />
           </div>
           <div>
             <div style={{ 
-              fontWeight: 800, fontSize: '1.05rem', 
-              background: 'linear-gradient(180deg, #FFFFFF 0%, #A0B4CB 100%)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-              lineHeight: 1.1, letterSpacing: '-0.02em'
+              fontWeight: 500, fontSize: '1.05rem', 
+              color: '#F5F5F7',
+              lineHeight: 1.1, letterSpacing: '-0.025em',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif'
             }}>
               Digital Force
             </div>
-            <div style={{ fontSize: '0.65rem', color: '#64748B', fontWeight: 600, letterSpacing: '0.05em', marginTop: 2 }}>
+            <div style={{ fontSize: '0.62rem', color: '#86868B', fontWeight: 500, letterSpacing: '0.04em', marginTop: 3 }}>
               AUTONOMOUS AGENCY
             </div>
           </div>

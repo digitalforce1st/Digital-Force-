@@ -230,6 +230,17 @@ async def delete_knowledge(
     item = await db.get(KnowledgeItem, item_id)
     if not item:
         raise HTTPException(404, "Item not found")
-    # TODO: Remove from Qdrant
+        
+    try:
+        if item.qdrant_ids:
+            import json
+            from rag.retriever import delete_points
+            ids = json.loads(item.qdrant_ids)
+            if ids:
+                collection = "brand" if item.category == "brand_voice" else "knowledge"
+                await delete_points(ids, collection=collection)
+    except Exception as e:
+        logger.error("Failed to delete Qdrant points for item %s: %s", item.id, str(e), exc_info=True)
+        
     await db.delete(item)
     return {"deleted": True}

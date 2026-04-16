@@ -151,27 +151,28 @@ function AuthModal({ onClose }: { onClose: () => void }) {
           borderBottom: '1px solid rgba(255,255,255,0.04)',
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <div style={{
-              width: 48, height: 48, borderRadius: 14,
-              background: 'linear-gradient(135deg, #00A3FF, #0061A0)',
+              width: 52, height: 52, borderRadius: 12,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 0 30px rgba(0,163,255,0.4)',
-              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.05)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+              overflow: 'hidden',
               flexShrink: 0,
             }}>
-              <Zap size={22} color="white" />
+              <img src="/logo.png" alt="Digital Force" style={{ width: 26, height: 26, objectFit: 'contain', opacity: 0.95 }} />
             </div>
             <div>
               <div style={{
-                fontWeight: 800, fontSize: '1.2rem',
-                background: 'linear-gradient(180deg, #FFFFFF 0%, #94BFDB 100%)',
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                letterSpacing: '-0.02em',
+                fontWeight: 500, fontSize: '1.25rem',
+                color: '#F5F5F7',
+                letterSpacing: '-0.025em',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif'
               }}>
                 Digital Force
               </div>
-              <div style={{ fontSize: '0.68rem', color: '#475569', fontWeight: 600, letterSpacing: '0.06em', marginTop: 2 }}>
+              <div style={{ fontSize: '0.68rem', color: '#86868B', fontWeight: 500, letterSpacing: '0.04em', marginTop: 4 }}>
                 SECURE ACCESS PROTOCOL
               </div>
             </div>
@@ -373,18 +374,23 @@ export default function LandingPage() {
         background: 'rgba(8,11,18,0.8)',
       }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 2rem', height: 70, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div style={{
-              width: 36, height: 36, borderRadius: 10,
-              background: 'linear-gradient(135deg, #00A3FF, #006199)',
+              width: 38, height: 38, borderRadius: 10,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 0 20px rgba(0,163,255,0.4)',
-              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.05)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+              overflow: 'hidden'
             }}>
-              <Zap size={18} color="white" />
+              <img src="/logo.png" alt="Digital Force" style={{ width: 18, height: 18, objectFit: 'contain', opacity: 0.95 }} />
             </div>
             <div>
-              <span style={{ fontWeight: 800, fontSize: '1.05rem', background: 'linear-gradient(180deg, #FFFFFF 0%, #94BFDB 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.02em' }}>
+              <span style={{ 
+                fontWeight: 500, fontSize: '1.05rem', 
+                color: '#F5F5F7', letterSpacing: '-0.025em',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif'
+              }}>
                 Digital Force
               </span>
             </div>

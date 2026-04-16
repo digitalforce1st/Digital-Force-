@@ -70,7 +70,7 @@ async def content_director_node(state: AgentState) -> dict:
         )
 
     if not pending_task:
-        return {"next_agent": "publisher", "messages": [{"role": "content_director", "content": "All content tasks complete."}]}
+        return {"next_agent": "publisher", "messages": [{"role": "assistant", "name": "content_director", "content": "All content tasks complete."}]}
 
     platform = pending_task.get("platform", "linkedin")
     brief = pending_task.get("content_brief", {})
@@ -127,8 +127,7 @@ Write compelling, {platform}-native content that drives real engagement.
             new_tasks.append(t)
 
         return {
-            "messages": [{"role": "content_director", "content": f"Content written for {platform}: {result.get('hook', '')[:60]}..."}],
-            "completed_task_ids": [pending_task.get("id", "")], # Delta
+            "messages": [{"role": "assistant", "name": "content_director", "content": f"Content written for {platform}: {result.get('hook', '')[:60]}..."}],
             "content_swarm_results": [{"task_id": pending_task.get("id", ""), "result": result}], # Delta
             "next_agent": "visual_designer", # In swarm mode this is ignored by router
             "current_task_id": pending_task.get("id"),

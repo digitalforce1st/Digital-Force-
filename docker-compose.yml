@@ -22,6 +22,25 @@ services:
       retries: 10
       start_period: 10s
 
+  # ── PostgreSQL Database ─────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: df_postgres
+    environment:
+      POSTGRES_USER: df_user
+      POSTGRES_PASSWORD: df_password
+      POSTGRES_DB: digitalforce
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U df_user -d digitalforce"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── FastAPI Backend ─────────────────────────────────────────────
   backend:
     build:
@@ -38,9 +57,11 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+      db:
+        condition: service_healthy
     environment:
       # Override .env values for containerized networking
-      - DATABASE_URL=sqlite+aiosqlite:////app/data/digitalforce.db
+      - DATABASE_URL=postgresql+asyncpg://df_user:df_password@db:5432/digitalforce
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_LOCAL_PATH=/app/qdrant_data
       - MEDIA_UPLOAD_DIR=/app/media/uploads
@@ -84,3 +105,5 @@ volumes:
   qdrant_data:    # Qdrant vector storage (persistent)
   media_data:     # Uploaded media files (persistent)
   db_data:        # SQLite database file (persistent)
+  pg_data:        # PostgreSQL database storage
+

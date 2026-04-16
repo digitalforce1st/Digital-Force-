@@ -133,7 +133,7 @@ async def publisher_node(state: AgentState) -> dict:
     if not publish_tasks:
         return {
             "next_agent": "monitor",
-            "messages": [{"role": "publisher", "content": "No pending publish tasks."}]
+            "messages": [{"role": "assistant", "name": "publisher", "content": "No pending publish tasks."}]
         }
 
     await agent_thought_push(
@@ -180,8 +180,8 @@ async def publisher_node(state: AgentState) -> dict:
                             logger.info(f"[Publisher] Used generated skill '{skill_name}' for {platform}")
                             result = skill_result
                             break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error("Generated skill '%s' encountered execution error: %s", skill_name, str(e), exc_info=True)
 
                 if not skill_result or not skill_result.get("success"):
                     # ── Autonomous GUI Fallback ──────
@@ -189,25 +189,28 @@ async def publisher_node(state: AgentState) -> dict:
                     # so SkillForge knows to hallucinate a Playwright navigation script.
                     from database import async_session, PlatformConnection
                     from sqlalchemy import select
-                    web_user, web_pass = None, None
+                    auth_data = ""
+                    account_label = task.get("account_label", "Unknown")
+                    connection_id = task.get("connection_id")
+                    
                     try:
                         async with async_session() as session:
-                            stmt = select(PlatformConnection).where(PlatformConnection.platform == platform)
-                            conn = (await session.execute(stmt)).scalar_one_or_none()
-                            if conn:
-                                web_user = conn.web_username
-                                web_pass = conn.web_password_encrypted
+                            if connection_id:
+                                stmt = select(PlatformConnection).where(PlatformConnection.id == connection_id)
+                                conn = (await session.execute(stmt)).scalar_one_or_none()
+                                if conn:
+                                    auth_data = conn.auth_data or ""
                     except Exception as e:
-                        logger.error(f"[Publisher] Failed to fetch web credentials: {e}")
+                        logger.error(f"[Publisher] Failed to fetch auth data: {e}")
                     
-                    cred_status = "Web credentials injected." if web_user else "User must add web credentials in Settings."
+                    cred_status = f"Auth Data bound." if auth_data else "User must add Auth Data in Truth Bucket."
                     result = {
                         "success": False,
-                        "error": f"API publishing unavailable. FATAL. Require SkillForge to deploy Playwright headless browser for GUI fallback. {cred_status}",
-                        "web_username": web_user,
-                        "web_password": web_pass
+                        "error": f"API publishing unavailable. FATAL. Require SkillForge to deploy Playwright Ghost Browser for {account_label} fallback. IMPORTANT: Use the strict auth_data attached! {cred_status}",
+                        "connection_id": connection_id,
+                        "auth_data": auth_data
                     }
-                    logger.info(f"[Publisher] API failed for {platform}. Routing to SkillForge for Headless GUI fallback.")
+                    logger.info(f"[Publisher] API payload skipped for {platform}. Routing account {account_label} to SkillForge Ghost Browser.")
 
             if result["success"]:
                 newly_completed.append(task.get("id", ""))
@@ -219,20 +222,20 @@ async def publisher_node(state: AgentState) -> dict:
                     goal_id=goal_id,
                     metadata={"platform": platform, "post_id": result.get("platform_post_id")},
                 )
-                messages.append({"role": "publisher", "content": f"✅ Posted to {platform}: {caption[:50]}..."})
+                messages.append({"role": "assistant", "name": "publisher", "content": f"✅ Posted to {platform}: {caption[:50]}..."})
             else:
                 newly_failed.append(task.get("id", ""))
                 task["error"] = result.get('error', 'Unknown error')
-                if "web_username" in result:
-                    task["web_username"] = result["web_username"]
-                    task["web_password"] = result["web_password"]
+                if "auth_data" in result:
+                    task["auth_data"] = result["auth_data"]
+                    task["connection_id"] = result["connection_id"]
                 await agent_thought_push(
                     user_id=user_id,
                     context=f"encountered a critical transmission error while attempting to publish to {platform}",
                     agent_name="publisher",
                     goal_id=goal_id,
                 )
-                messages.append({"role": "publisher", "content": f"❌ Failed {platform}: {result.get('error')}"})
+                messages.append({"role": "assistant", "name": "publisher", "content": f"❌ Failed {platform}: {result.get('error')}"})
 
         except Exception as e:
             logger.error(f"[Publisher] Error posting to {platform}: {e}")

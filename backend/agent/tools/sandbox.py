@@ -1,14 +1,16 @@
 """
 Digital Force — Sandbox Execution Tool
-Provides a secure E2B container runner for all agents to execute Python/Playwright scraping code.
+Provides a Local subprocess runner for all agents to execute Python/Playwright scraping code.
 """
 
 import json
 import logging
-from config import get_settings
+import asyncio
+import sys
+import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 def is_playwright_used(code: str) -> bool:
     """Detect if the generated script uses Playwright."""
@@ -16,50 +18,52 @@ def is_playwright_used(code: str) -> bool:
 
 async def run_in_e2b(code: str, function_name: str = None, test_args: dict = None) -> dict:
     """
-    Execute generated code in the E2B cloud sandbox.
-    Auto-detects Playwright usage and installs Chromium in the sandbox if needed.
+    Execute generated code using a local subprocess.
+    Maintains the 'run_in_e2b' signature for backwards compatibility but does not use E2B.
     """
-    if not settings.e2b_api_key:
-        logger.warning("[Sandbox] E2B not configured. Simulated execution only.")
-        return {"success": False, "error": "E2B_API_KEY not configured. Cannot strictly execute sandbox code."}
-
     uses_playwright = is_playwright_used(code)
 
+    if function_name:
+        test_code = f"import asyncio\n{code}\n\nasync def _test():\n    return await {function_name}(**{json.dumps(test_args or {})})\n\nprint('RESULT:', asyncio.run(_test()))"
+    else:
+        test_code = code
+
+    logger.info("[Sandbox] Running code in Local Subprocess Sandbox...")
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        f.write(test_code)
+        temp_path = f.name
+        
     try:
-        from e2b_code_interpreter import Sandbox
-        async with Sandbox(api_key=settings.e2b_api_key) as sbx:
-            # Base dependency install
-            await sbx.commands.run("pip install httpx requests beautifulsoup4 lxml pandas -q")
+        # Run local subprocess with 30 second timeout
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, temp_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            return {"success": False, "error": "Execution timed out after 30 seconds."}
 
-            # Playwright: install + download Chromium inside the sandbox
-            if uses_playwright:
-                logger.info("[Sandbox] Playwright detected — installing Chromium in E2B sandbox...")
-                install_result = await sbx.commands.run(
-                    "pip install playwright -q && playwright install chromium --with-deps -q"
-                )
-                logger.info(f"[Sandbox] Playwright sandbox ready.")
-
-            # If function_name and test_args are provided, it's a tool-test (like SkillForge)
-            # Otherwise, it's an auto-execution script (like Researcher scraping)
-            if function_name:
-                test_code = f"import asyncio\n{code}\n\nasync def _test():\n    return await {function_name}(**{json.dumps(test_args or {})})\n\nprint('RESULT:', asyncio.run(_test()))"
-            else:
-                test_code = code
-
-            logger.info("[Sandbox] Running code in E2B container...")
-            result = await sbx.run_code(test_code)
+        output = stdout.decode(errors='replace').strip()
+        error = stderr.decode(errors='replace').strip()
+        
+        sandbox_type = "local_playwright" if uses_playwright else "local_standard"
+        
+        # Determine success
+        if process.returncode != 0:
+            return {"success": False, "error": error or output, "output": output, "sandbox": sandbox_type}
             
-            output = result.text or ""
-            error = result.error.message if result.error else None
-            
-            success = (error is None) and ("'success': False" not in output)
-            sandbox_type = "e2b_playwright" if uses_playwright else "e2b_standard"
-            
-            if error:
-                return {"success": False, "error": error, "output": output, "sandbox": sandbox_type}
-            else:
-                return {"success": success, "output": output, "sandbox": sandbox_type}
-
+        success = ("'success': False" not in output)
+        return {"success": success, "output": output, "error": error if error else None, "sandbox": sandbox_type}
+        
     except Exception as e:
-        logger.error(f"[Sandbox] E2B execution failed: {e}")
+        logger.error("Local execution failed: %s", str(e), exc_info=True)
         return {"success": False, "error": str(e)}
+    finally:
+        try:
+            Path(temp_path).unlink(missing_ok=True)
+        except Exception:
+            pass

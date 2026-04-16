@@ -154,6 +154,27 @@ async def store(
         raise
 
 
+async def delete_points(
+    point_ids: list[str],
+    collection: str = "knowledge",
+) -> None:
+    """Delete specific points from Qdrant by ID."""
+    if not point_ids:
+        return
+    try:
+        client = _get_client()
+        collection_map = {
+            "knowledge": settings.qdrant_knowledge_collection,
+            "brand": settings.qdrant_brand_collection,
+            "media": settings.qdrant_media_collection,
+        }
+        collection_name = collection_map.get(collection, settings.qdrant_knowledge_collection)
+        client.delete(collection_name=collection_name, points_selector=point_ids)
+        logger.info(f"[RAG] Deleted {len(point_ids)} points from {collection_name}")
+    except Exception as e:
+        logger.error("Failed to delete points from Qdrant: %s", str(e), exc_info=True)
+
+
 async def ensure_collections():
     """Create Qdrant collections if they don't exist."""
     from qdrant_client.models import Distance, VectorParams

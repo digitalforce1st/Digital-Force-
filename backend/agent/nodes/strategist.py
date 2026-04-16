@@ -90,7 +90,7 @@ Each task must have enough detail for the Content Director to act without clarif
         return {
             "campaign_plan": plan,
             "tasks": tasks,
-            "messages": [{"role": "strategist", "content": f"Plan created: {len(tasks)} tasks over {duration} days"}],
+            "messages": [{"role": "assistant", "name": "strategist", "content": f"Plan created: {len(tasks)} tasks over {duration} days"}],
             "next_agent": "manager",
         }
 

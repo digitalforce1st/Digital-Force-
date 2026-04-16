@@ -118,6 +118,7 @@ class AgentTask(Base):
     depends_on: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # JSON list of task IDs
     scheduled_for: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     platform: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # target platform
+    connection_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("platform_connections.id"), nullable=True) # specific account
 
     # Status
     status: Mapped[str] = mapped_column(String(50), default="pending_approval")
@@ -281,6 +282,7 @@ class PublishedPost(Base):
 
     # Platform
     platform: Mapped[str] = mapped_column(String(50))  # linkedin | facebook | twitter | tiktok | instagram
+    connection_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("platform_connections.id"), nullable=True) # specific account
     platform_post_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     platform_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     publisher: Mapped[str] = mapped_column(String(50), default="buffer")  # buffer | facebook_graph
@@ -313,8 +315,9 @@ class PlatformConnection(Base):
     __tablename__ = "platform_connections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    platform: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
     display_name: Mapped[str] = mapped_column(String(200))
+    account_label: Mapped[str] = mapped_column(String(100), default="Primary")
     account_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     account_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
@@ -322,6 +325,10 @@ class PlatformConnection(Base):
     access_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     refresh_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Truth bucket & Headless Config
+    auth_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True) # Free-text notes / truth bucket
+    proxy_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) 
     
     # Headless browser fallback credentials
     web_username: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

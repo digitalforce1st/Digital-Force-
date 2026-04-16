@@ -47,7 +47,6 @@ async def manager_node(state: AgentState) -> dict:
             state_updates["tasks"] = tasks
     
     # 1. Compress State for LLM
-    tasks = state.get("tasks", [])
     completed = state.get("completed_task_ids", [])
     failed = state.get("failed_task_ids", [])
     uncompleted = [t for t in tasks if t.get("id") not in completed and t.get("id") not in failed]
@@ -62,7 +61,8 @@ async def manager_node(state: AgentState) -> dict:
         "tasks_completed": len(completed),
         "tasks_failed": len(failed),
         "uncompleted_content_tasks": len([t for t in uncompleted if t.get("task_type") == "generate_content"]),
-        "uncompleted_publish_tasks": len([t for t in uncompleted if t.get("task_type") == "post_content"]),
+        "uncompleted_publish_tasks_unassigned": len([t for t in uncompleted if t.get("task_type") == "post_content" and not t.get("connection_id")]),
+        "uncompleted_publish_tasks_assigned": len([t for t in uncompleted if t.get("task_type") == "post_content" and t.get("connection_id")]),
     }
 
     # 2. Dynamic True NLP Routing
@@ -78,7 +78,8 @@ Available Agents:
 - "researcher": if research is missing or needs replanning
 - "strategist": if campaign plan is missing but research is done
 - "content_director": if there are uncompleted content tasks (need generating)
-- "publisher": if there are uncompleted publish tasks (content generated, need posting)
+- "distribution_manager": if there are uncompleted publish tasks that have NOT been assigned to an account (uncompleted_publish_tasks_unassigned > 0)
+- "publisher": if there are uncompleted publish tasks that ARE assigned (uncompleted_publish_tasks_assigned > 0)
 - "monitor": if all tasks are processed or executing is done
 - "__end__": if the plan is ready but status is still pending (halt for human approval)
 

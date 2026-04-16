@@ -58,7 +58,7 @@ Parse this goal and produce the mission brief JSON.
             "platforms": platforms,
             "success_metrics": result.get("success_metrics", {}),
             "constraints": result.get("constraints", {}),
-            "messages": [{"role": "orchestrator", "content": json.dumps(result)}],
+            "messages": [{"role": "assistant", "name": "orchestrator", "content": json.dumps(result)}],
             "next_agent": next_node,
             "iteration_count": state.get("iteration_count", 0) + 1,
         }
