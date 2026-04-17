@@ -43,6 +43,13 @@ def start_ngrok(port: int = 8000):
 if __name__ == "__main__":
     # Start ngrok tunnel before uvicorn
     start_ngrok(port=8000)
-    # We pass the application as an import string to support reload
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Exclude venv from reload watcher to prevent infinite restart loops
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=["d:\\KASHIRI BRIGHTON\\BUSINESS\\AiiA\\Digital Force\\backend"],
+        reload_excludes=["venv/*", "*.pyc", "__pycache__/*", "ngrok*", ".ngrok*"],
+    )
 

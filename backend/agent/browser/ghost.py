@@ -28,8 +28,11 @@ class GhostBrowser:
             self._playwright = await async_playwright().start()
             logger.info("👻 Ghost Browser Playwright engine started (waiting for context requests).")
         except Exception as e:
-            logger.error(f"Failed to start Ghost Browser Playwright: {e}")
-            raise
+            # Non-fatal: Ghost Browser is optional. Agents that need it will
+            # receive a clear error. We must NOT crash the entire backend here.
+            logger.warning(f"⚠️  Ghost Browser unavailable (Playwright failed to start): {e}")
+            logger.warning("   Web scraping via headless browser will be disabled this session.")
+            self._playwright = None
             
     async def stop(self):
         """Cleanly shutdown all browser contexts."""

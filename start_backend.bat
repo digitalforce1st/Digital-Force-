@@ -1,6 +1,6 @@
 @echo off
 echo ================================================
-echo  Digital Force -- Backend Launcher
+echo  Digital Force -- Full Stack Launcher
 echo ================================================
 echo.
 
@@ -18,7 +18,8 @@ echo [2/3] Checking for missing packages...
 "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\pip.exe" install --no-cache-dir --only-binary=:all: -q -r "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\requirements.txt"
 echo Done.
 
-echo [3/3] Starting FastAPI backend on port 8000...
+echo [3/3] Starting Digital Force Backend + Ngrok Tunnel...
+echo      (Ngrok public URL will appear below)
 echo.
 cd /d "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend"
-"d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\uvicorn.exe" main:app --host 0.0.0.0 --port 8000 --reload
+"d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\python.exe" run_server.py
