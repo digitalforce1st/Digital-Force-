@@ -96,3 +96,10 @@ desktop.ini
 *.log
 logs/
 celery_logs/
+
+# ─────────────────────────────────────────────────────────
+# Ngrok (local tunnel binary — never commit)
+# ─────────────────────────────────────────────────────────
+backend/ngrok.exe
+backend/ngrok.zip
+backend/.ngrok_url
