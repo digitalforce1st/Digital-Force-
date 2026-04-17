@@ -115,7 +115,7 @@ export default function ChatPage() {
       try {
         const data = await api.chat.updates(lastPollTime || undefined)
         setAgentsActive(data.agents_active)
-        setCurrentActivity(data.current_activity)
+        setCurrentActivity(data.current_activity ?? null)
         
         if (data.messages && data.messages.length > 0) {
           setMessages(prev => {
