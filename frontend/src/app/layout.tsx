@@ -7,6 +7,8 @@ export const metadata: Metadata = {
   keywords: ['AI', 'social media', 'autonomous', 'digital marketing', 'content generation'],
 }
 
+import AuthGuard from '@/components/AuthGuard'
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
@@ -19,7 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="bg-surface text-white antialiased min-h-screen">
-        {children}
+        <AuthGuard>
+          {children}
+        </AuthGuard>
       </body>
     </html>
   )
