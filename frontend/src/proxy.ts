@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// Cloudflare Pages requires all middleware to run on the Edge Runtime
-export const runtime = 'edge'
+// Next.js 16 requires 'experimental-edge' for the proxy/middleware runtime
+export const runtime = 'experimental-edge'
 
 const PUBLIC_PATHS = ['/login', '/landing', '/api', '/_next', '/favicon.ico']
 
 /**
- * Next.js Edge Middleware — authenticates all private routes.
+ * Next.js 16 Proxy (renamed from middleware) — authenticates all private routes.
  * Checks the df_token cookie set at login and redirects to /login if missing.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Allow public paths through without auth check
