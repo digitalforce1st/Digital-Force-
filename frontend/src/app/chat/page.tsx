@@ -617,7 +617,6 @@ export default function ChatPage() {
                  <AssetSelector 
                    onSelect={handleSelectAsset} 
                    onClose={() => setShowAssetSelector(false)} 
-                   triggerRef={plusButtonRef} 
                  />
               )}
               <button 
