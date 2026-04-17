@@ -10,6 +10,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 interface AssetSelectorProps {
   onSelect: (asset: MediaAsset) => void
   onClose: () => void
+  triggerRef?: React.RefObject<HTMLButtonElement | null>
 }
 
 export default function AssetSelector({ onSelect, onClose }: AssetSelectorProps) {
