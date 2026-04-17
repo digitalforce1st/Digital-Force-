@@ -1,3 +1,4 @@
+// Cloudflare Build Cache Buster
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
