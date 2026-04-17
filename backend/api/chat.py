@@ -53,7 +53,7 @@ async def chat_stream(
 
     async def generate():
         try:
-            yield f"data: {json.dumps({'type': 'action', 'content': 'Transmitting to Digital Force...'})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'action', 'content': 'Transmitting to Digital Force...'})}\n\n"
             await asyncio.sleep(0.1)
 
             # 2. Build AgentState
@@ -149,7 +149,8 @@ Return strictly JSON:
                         match_str = f"%{account_match}%"
                         conn = (await db.execute(select(PlatformConnection).where(or_(PlatformConnection.account_label.ilike(match_str), PlatformConnection.display_name.ilike(match_str))))).scalars().first()
                         if conn:
-                            conn.auth_data = f"{conn.auth_data or ''}\\n[Agent Auto-Saved Update]: {text_to_append}".strip()
+                            conn.auth_data = (f"{conn.auth_data or ''}"
+                                               f"\n[Agent Auto-Saved Update]: {text_to_append}").strip()
                             await db.commit()
             except Exception as e:
                 reply = "Acknowledged. Routing internal systems to compensate."
@@ -162,12 +163,12 @@ Return strictly JSON:
             await db.commit()
 
             # STREAM RESULT TO UI IMMEDIATELY
-            yield f"data: {json.dumps({'type': 'bubble_start', 'bubble_id': bot_msg_id})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'bubble_start', 'bubble_id': bot_msg_id})}\n\n"
             chunk_size = 5
             for i in range(0, len(reply), chunk_size):
-                yield f"data: {json.dumps({'type': 'message', 'content': reply[i:i+chunk_size]})}\\n\\n"
+                yield f"data: {json.dumps({'type': 'message', 'content': reply[i:i+chunk_size]})}\n\n"
                 await asyncio.sleep(0.01)
-            yield f"data: {json.dumps({'type': 'bubble_end'})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'bubble_end'})}\n\n"
 
             # Launch graph in background explicitly specifying next routing logic
             if requires_manager:
@@ -178,10 +179,10 @@ Return strictly JSON:
                 initial_state["next_agent"] = "__end__"
                 
             asyncio.create_task(execution_graph.ainvoke(initial_state))
-            yield f"data: {json.dumps({'type': 'done', 'content': ''})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'done', 'content': ''})}\n\n"
         except Exception as e:
             logger.error(f"[Chat] Stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(
         generate(),
