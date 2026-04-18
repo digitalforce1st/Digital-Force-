@@ -191,7 +191,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-3 gap-5">
             {[
               { href: '/goals/new',  icon: Target,    title: 'Deploy Task',   desc: 'Initialize autonomous campaign',  color: '#00A3FF' },
-              { href: '/knowledge',  icon: Network,   title: 'Knowledge Core',     desc: 'Inject text & media assets',      color: '#22D3EE' },
+              { href: '/knowledge',  icon: Network,   title: 'Knowledge',          desc: 'Inject text & media assets',      color: '#22D3EE' },
               { href: '/skills',     icon: Cpu,       title: 'SkillForge',         desc: 'Upgrade neural capabilities',     color: '#10B981' },
             ].map(({ href, icon: Icon, title, desc, color }) => (
                <Link key={href} href={href}

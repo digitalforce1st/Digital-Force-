@@ -69,7 +69,7 @@ async def ghost_visual_research(goal: str, platform: str) -> dict:
                   "{\"trending_topics\": [\"topic1\"], \"recommended_hashtags\": {\"global\": []}, \"content_angles\": [\"angle1\"], \"audience_insights\": \"...\"}")
                   
         resp = await client.chat.completions.create(
-            model="llama-3.2-90b-vision-preview",
+            model="llama-3.2-11b-vision-preview",
             messages=[{
                 "role": "user",
                 "content": [

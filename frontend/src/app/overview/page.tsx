@@ -265,7 +265,7 @@ export default function OverviewPage() {
               style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.25rem' }}>
               {[
                 { href: '/goals/new', icon: Target, title: 'Deploy Campaign', desc: 'Initialize autonomous campaign', color: '#00A3FF' },
-                { href: '/knowledge', icon: Network, title: 'Knowledge Core', desc: 'Inject intelligence assets', color: '#22D3EE' },
+                { href: '/knowledge', icon: Network, title: 'Knowledge', desc: 'Inject intelligence assets', color: '#22D3EE' },
                 { href: '/skills', icon: Cpu, title: 'SkillForge', desc: 'Upgrade neural capabilities', color: '#10B981' },
               ].map(({ href, icon: Icon, title, desc, color }) => (
                 <motion.div key={href} variants={stagger.item}>

@@ -20,7 +20,7 @@ const EXAMPLES = [
   'Schedule 50 Facebook posts of our summit flyers across this week, starting tomorrow',
   'Grow our LinkedIn following from 1,000 to 5,000 in the next 30 days',
   'Post our 10 product videos across TikTok, Instagram, and YouTube',
-  'Run a 2-week awareness campaign using assets from the Knowledge Core',
+  'Run a 2-week awareness campaign using assets from the Knowledge',
   'Create a thought leadership series on LinkedIn for our CEO, 1 post per day for 7 days',
 ]
 

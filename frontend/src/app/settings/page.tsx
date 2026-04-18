@@ -38,18 +38,18 @@ function Field({ label, id, value, placeholder, isSecret, onChange, hint, type =
       </label>
       <div style={{ position: 'relative' }}>
         <input
-          id={id} type={isSecret && !show ? 'password' : type}
+          id={id} type={isSecret && (!show || value.includes('•')) ? 'password' : type}
           value={value} onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
           style={{
-            width: '100%', padding: `0.6rem ${isSecret ? '2.75rem' : '0.875rem'} 0.6rem 0.875rem`,
+            width: '100%', padding: `0.6rem ${isSecret && !value.includes('•') ? '2.75rem' : '0.875rem'} 0.6rem 0.875rem`,
             borderRadius: 10, background: 'rgba(255,255,255,0.05)',
             border: '1px solid rgba(255,255,255,0.09)', color: '#fff',
             fontSize: '0.875rem', outline: 'none', boxSizing: 'border-box',
-            fontFamily: isSecret && !show ? 'monospace' : 'inherit',
+            fontFamily: isSecret && (!show || value.includes('•')) ? 'monospace' : 'inherit',
           }}
         />
-        {isSecret && (
+        {isSecret && !value.includes('•') && (
           <button type="button" onClick={() => setShow(!show)}
             style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
               background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', cursor: 'pointer', padding: 4 }}>
@@ -705,10 +705,22 @@ export default function SettingsPage() {
         {/* ── Notifications ── */}
         {activeTab === 'notifications' && (
           <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '0.35rem 0.75rem',
+                borderRadius: 8, fontSize: '0.78rem', fontWeight: 500,
+                background: (status.email as any)?.smtp ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${(status.email as any)?.smtp ? 'rgba(52,211,153,0.25)' : 'rgba(255,255,255,0.08)'}`,
+                color: (status.email as any)?.smtp ? '#34D399' : 'rgba(255,255,255,0.35)',
+              }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: (status.email as any)?.smtp ? '#34D399' : 'rgba(255,255,255,0.2)' }} />
+                SMTP Status
+              </div>
+            </div>
             <Section title="Email Notifications — SMTP">
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field id="smtp_host" label="SMTP Host" value={form.smtp_host || ''} onChange={set('smtp_host')} placeholder="smtp.gmail.com" />
-                <Field id="smtp_port" label="SMTP Port" type="number" value={form.smtp_port || '587'} onChange={set('smtp_port')} />
+                <Field id="smtp_host" label="SMTP Host" value={form.smtp_host ?? ''} onChange={set('smtp_host')} placeholder="smtp.gmail.com" />
+                <Field id="smtp_port" label="SMTP Port" type="number" value={form.smtp_port ?? ''} onChange={set('smtp_port')} placeholder="587" />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <Field id="smtp_username" label="Email Address" value={form.smtp_username || ''} onChange={set('smtp_username')} placeholder="you@gmail.com" />

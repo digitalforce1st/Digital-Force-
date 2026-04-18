@@ -25,7 +25,7 @@ class AccountUpdate(BaseModel):
 
 @router.get("/", response_model=List[dict])
 async def list_accounts(db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
-    stmt = select(PlatformConnection)
+    stmt = select(PlatformConnection).where(PlatformConnection.user_id == current_user.get("sub"))
     result = await db.execute(stmt)
     accounts = result.scalars().all()
     # Mask sensitive data inside auth_data if we wanted, but since it's the owner's dashboard we return it
@@ -47,6 +47,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db), current_user = Depen
 async def create_account(account: AccountCreate, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
     new_account = PlatformConnection(
         id=str(uuid.uuid4()),
+        user_id=current_user.get("sub"),
         platform=account.platform,
         display_name=account.display_name,
         account_label=account.account_label,
@@ -61,7 +62,7 @@ async def create_account(account: AccountCreate, db: AsyncSession = Depends(get_
 
 @router.put("/{account_id}")
 async def update_account(account_id: str, updates: AccountUpdate, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
-    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
+    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id, PlatformConnection.user_id == current_user.get("sub"))
     result = await db.execute(stmt)
     acc = result.scalar_one_or_none()
     if not acc:
@@ -76,7 +77,7 @@ async def update_account(account_id: str, updates: AccountUpdate, db: AsyncSessi
 
 @router.delete("/{account_id}")
 async def delete_account(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
-    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
+    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id, PlatformConnection.user_id == current_user.get("sub"))
     result = await db.execute(stmt)
     acc = result.scalar_one_or_none()
     if acc:

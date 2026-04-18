@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
 
 from auth import get_current_user
 
@@ -58,7 +58,7 @@ class SettingsUpdate(BaseModel):
 
     # Email
     smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
+    smtp_port: Optional[Union[int, str]] = None
     smtp_username: Optional[str] = None
     smtp_password: Optional[str] = None
     smtp_from_name: Optional[str] = None
@@ -66,28 +66,36 @@ class SettingsUpdate(BaseModel):
     target_notification_emails: Optional[str] = None
 
     # Agent
-    agent_max_iterations: Optional[int] = None
-    agent_timeout_seconds: Optional[int] = None
+    agent_max_iterations: Optional[Union[int, str]] = None
+    agent_timeout_seconds: Optional[Union[int, str]] = None
 
     # Storage
     storage_backend: Optional[str] = None
     s3_bucket: Optional[str] = None
     s3_region: Optional[str] = None
+    
+    # Proxy
+    proxy_provider_api: Optional[str] = None
 
 
 MASKED_KEYS = {
     "groq_api_key_1", "groq_api_key_2", "groq_api_key_3", "buffer_access_token",
     "facebook_access_token", "qdrant_api_key", "smtp_password",
     "s3_access_key", "s3_secret_key", "r2_access_key", "r2_secret_key",
-    "encryption_key", "jwt_secret_key",
+    "encryption_key", "jwt_secret_key", "proxy_provider_api",
 }
 
 
 def _mask(key: str, value: str) -> str:
     if not value:
         return ""
-    if key in MASKED_KEYS and len(value) > 8:
-        return value[:4] + "•" * (len(value) - 8) + value[-4:]
+    if key in MASKED_KEYS:
+        if len(value) > 8:
+            return value[:4] + "•" * (len(value) - 8) + value[-4:]
+        elif len(value) > 4:
+            return value[:2] + "•" * (len(value) - 4) + value[-2:]
+        else:
+            return "••••••••"
     return value
 
 
@@ -140,6 +148,9 @@ async def get_settings(user: dict = Depends(get_current_user)):
         "storage_backend": s.storage_backend,
         "media_upload_dir": s.media_upload_dir,
 
+        # Proxy
+        "proxy_provider_api": s.proxy_provider_api,
+
         # Overrides applied indicator
         "_has_overrides": bool(overrides),
         "_override_keys": list(overrides.keys()),
@@ -182,6 +193,9 @@ async def update_settings(
 @router.delete("/overrides")
 async def reset_overrides(user: dict = Depends(get_current_user)):
     """Remove all setting overrides and revert to .env defaults."""
+    if user.get("role") not in ("admin", "operator", None):
+        raise HTTPException(403, "Only admins can reset settings")
+
     if SETTINGS_FILE.exists():
         SETTINGS_FILE.unlink()
     return {"status": "reset", "message": "All overrides cleared. Using .env defaults."}

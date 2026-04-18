@@ -315,6 +315,7 @@ class PlatformConnection(Base):
     __tablename__ = "platform_connections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), index=True, nullable=True)
     platform: Mapped[str] = mapped_column(String(50), index=True)
     display_name: Mapped[str] = mapped_column(String(200))
     account_label: Mapped[str] = mapped_column(String(100), default="Primary")

@@ -75,7 +75,7 @@ async def chat_stream(
                 .order_by(desc(ChatMessage.created_at)).limit(10)
             )
             hist = hist_result.scalars().all()
-            hist_msgs = [{"role": m.role, "content": m.content} for m in reversed(hist)]
+            hist_msgs = [{"role": m.role if m.role != "agent" else "assistant", "content": f"[{m.agent_name}]: {m.content}" if m.agent_name and m.role == "agent" else m.content} for m in reversed(hist)]
             
             initial_state = {
                 "created_by": user_id,

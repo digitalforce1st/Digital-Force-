@@ -160,55 +160,6 @@ async def update_agency_settings(
     }
 
 
-@router.post("/briefs")
-async def add_brief_slot(
-    slot: BriefSlot,
-    db: AsyncSession = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Add a single new brief slot."""
-    user_id = user.get("sub")
-    cfg = await _get_or_create_settings(user_id, db)
-
-    slots = json.loads(cfg.brief_slots or "[]")
-    new_slot = {
-        "id": str(uuid.uuid4()),
-        "label": slot.label,
-        "time": slot.time,
-        "recurrence": slot.recurrence,
-        "date": slot.date,
-    }
-    slots.append(new_slot)
-    cfg.brief_slots = json.dumps(slots)
-    cfg.updated_at = datetime.utcnow()
-    await db.commit()
-
-    return {"status": "added", "slot": new_slot, "all_slots": slots}
-
-
-@router.delete("/briefs/{slot_id}")
-async def delete_brief_slot(
-    slot_id: str,
-    db: AsyncSession = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Remove a brief slot by ID."""
-    user_id = user.get("sub")
-    cfg = await _get_or_create_settings(user_id, db)
-
-    slots = json.loads(cfg.brief_slots or "[]")
-    before = len(slots)
-    slots = [s for s in slots if s.get("id") != slot_id]
-
-    if len(slots) == before:
-        raise HTTPException(404, "Brief slot not found")
-
-    cfg.brief_slots = json.dumps(slots)
-    cfg.updated_at = datetime.utcnow()
-    await db.commit()
-
-    return {"status": "deleted", "all_slots": slots}
-
 
 @router.get("/status")
 async def agency_status(

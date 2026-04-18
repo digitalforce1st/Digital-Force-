@@ -119,6 +119,10 @@ Return JSON ONLY:
 # ─── Specialised helpers ──────────────────────────────────────────────────────
 
 async def _get_user_email(user_id: str) -> Optional[str]:
+    target_emails = settings.target_notification_emails
+    if target_emails:
+        return target_emails.split(',')[0].strip()
+
     if not user_id:
         return None
     try:
@@ -153,6 +157,7 @@ async def notify_api_key_needed(
         token=token
     )
     
+    to_email = await _get_user_email(user_id)
     await send_agent_email(email_data["subject"], email_data["text"], email_data["html"], approval_token=token, to_email=to_email)
     return token
 
@@ -194,6 +199,7 @@ async def notify_high_risk_approval(
     except Exception as e:
         logger.error(f"[Email] Could not store pending approval: {e}")
 
+    to_email = await _get_user_email(user_id)
     await send_agent_email(email_data["subject"], email_data["text"], email_data["html"], approval_token=token, to_email=to_email)
     return token
 

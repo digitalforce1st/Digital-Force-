@@ -22,14 +22,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
-const CATEGORIES = [
-  { id: 'brand_voice',      label: 'Brand Voice' },
-  { id: 'product_info',     label: 'Product / Service' },
-  { id: 'market_research',  label: 'Market Research' },
-  { id: 'content_examples', label: 'Content Examples' },
-  { id: 'competitor',       label: 'Competitor Intel' },
-  { id: 'other',            label: 'General' },
-]
+
 
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   indexed:    { color: '#34D399', bg: 'rgba(16,185,129,0.1)' },
@@ -77,7 +70,7 @@ function InlineRename({ defaultName, onSave }: { defaultName: string; onSave: (n
   )
 }
 
-// ── Main Knowledge Core Page ─────────────────────────────────
+// ── Main Knowledge Page ─────────────────────────────────
 export default function KnowledgePage() {
   const [mediaItems, setMediaItems] = useState<MediaAsset[]>([])
   const [docItems, setDocItems] = useState<TrainingDoc[]>([])
@@ -88,7 +81,7 @@ export default function KnowledgePage() {
   
   // Ingest states
   const [ingestTab, setIngestTab] = useState<'file' | 'url' | 'text'>('file')
-  const [category, setCategory] = useState('brand_voice')
+
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
   const [rawText, setRawText] = useState('')
@@ -123,7 +116,7 @@ export default function KnowledgePage() {
   const handleFile = async (file: File) => {
     setUploading(true)
     const fd = new FormData()
-    fd.append('file', file); fd.append('category', category); fd.append('title', title || file.name)
+    fd.append('file', file); fd.append('title', title || file.name)
     try { await api.training.upload(fd); showSuccess(`"${file.name}" indexed successfully`); loadAll() }
     catch (e) { console.error(e) } finally { setUploading(false) }
   }
@@ -143,12 +136,12 @@ export default function KnowledgePage() {
     if (primaryMode === 'media_library' && !isMedia) return;
     if (primaryMode === 'training' && isMedia) return;
     isMedia ? handleMedia(file) : handleFile(file)
-  }, [category, title, primaryMode])
+  }, [title, primaryMode])
 
   const handleUrlIngest = async () => {
     if (!url.trim()) return
     setUploading(true)
-    try { await api.training.uploadUrl(url.trim(), category); showSuccess('URL ingested and indexed'); setUrl(''); loadAll() }
+    try { await api.training.uploadUrl(url.trim(), 'other'); showSuccess('URL ingested and indexed'); setUrl(''); loadAll() }
     catch (e) { console.error(e) } finally { setUploading(false) }
   }
 
@@ -156,8 +149,8 @@ export default function KnowledgePage() {
     if (!rawText.trim()) return
     setUploading(true)
     const fd = new FormData()
-    fd.append('raw_text', rawText.trim()); fd.append('category', category); fd.append('title', title || 'Note')
-    try { await api.training.upload(fd); showSuccess('Note indexed to Knowledge Core'); setRawText(''); setTitle(''); loadAll() }
+    fd.append('raw_text', rawText.trim()); fd.append('title', title || 'Note')
+    try { await api.training.upload(fd); showSuccess('Note indexed to Knowledge'); setRawText(''); setTitle(''); loadAll() }
     catch (e) { console.error(e) } finally { setUploading(false) }
   }
 
@@ -178,7 +171,7 @@ export default function KnowledgePage() {
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
               <div>
                 <h1 style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.035em', background: 'linear-gradient(180deg, #FFFFFF 0%, #94A3B8 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: 1.1, marginBottom: '0.625rem' }}>
-                  Knowledge Core
+                  Knowledge
                 </h1>
                 <p style={{ fontSize: '0.875rem', color: '#475569' }}>
                   The central intelligence hub — distinct training pipelines and visual asset libraries
@@ -333,25 +326,7 @@ export default function KnowledgePage() {
             <div style={{ position: 'sticky', top: '2rem' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                 
-                {primaryMode === 'training' && (
-                  <div style={{ padding: '1.25rem', borderRadius: '1rem', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(255,255,255,0.04)', backdropFilter: 'blur(12px)' }}>
-                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', marginBottom: '0.875rem' }}>KNOWLEDGE CATEGORY</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                      {CATEGORIES.map(c => (
-                        <button key={c.id} onClick={() => setCategory(c.id)}
-                          style={{
-                            width: '100%', textAlign: 'left', padding: '0.625rem 0.875rem', borderRadius: 8, fontSize: '0.82rem',
-                            fontWeight: 500, cursor: 'pointer', transition: 'all 0.15s',
-                            background: category === c.id ? 'rgba(0,163,255,0.12)' : 'rgba(255,255,255,0.02)',
-                            border: `1px solid ${category === c.id ? 'rgba(0,163,255,0.35)' : 'rgba(255,255,255,0.04)'}`,
-                            color: category === c.id ? '#33BAFF' : '#94A3B8',
-                          }}>
-                          {c.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+
 
                 <div style={{ padding: '1.25rem', borderRadius: '1rem', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(255,255,255,0.04)', backdropFilter: 'blur(12px)' }}>
                   {primaryMode === 'training' ? (

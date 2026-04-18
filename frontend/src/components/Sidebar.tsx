@@ -57,7 +57,7 @@ export default function Sidebar() {
     { href: '/overview', label: 'Overview',         icon: LayoutDashboard },
     { href: '/goals',    label: 'Tasks',       icon: Target, badge: awaitingCount || undefined },
     { href: '/analytics',label: 'Analytics',        icon: BarChart2 },
-    { href: '/knowledge',label: 'Knowledge Core',   icon: Network },
+    { href: '/knowledge',label: 'Knowledge',        icon: Network },
     { href: '/skills',   label: 'SkillForge',       icon: Cpu },
     { href: '/settings', label: 'Settings',         icon: Settings },
   ]

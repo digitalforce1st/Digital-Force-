@@ -24,7 +24,7 @@ def start_ngrok(port: int = 8000):
         # Use the authtoken from env or hardcoded for local dev
         authtoken = os.environ.get("NGROK_AUTHTOKEN", "3CTdhTZhb44Ddv3fw4DlQZRkjAs_2atEtEaWJKsbbMLaWbyu9")
         conf.get_default().auth_token = authtoken
-        tunnel = ngrok.connect(port, "http")
+        tunnel = ngrok.connect(port, "http", domain="lunacy-unsettled-probe.ngrok-free.dev")
         public_url = tunnel.public_url
         print("\n" + "="*60)
         print(f"  🌐 DIGITAL FORCE PUBLIC URL (Ngrok)")
@@ -42,7 +42,7 @@ def start_ngrok(port: int = 8000):
 
 if __name__ == "__main__":
     # Start ngrok tunnel before uvicorn
-    start_ngrok(port=8000)
+    # start_ngrok(port=8000) # disabled to run ngrok in separate terminal
     # Exclude venv from reload watcher to prevent infinite restart loops
     uvicorn.run(
         "main:app",

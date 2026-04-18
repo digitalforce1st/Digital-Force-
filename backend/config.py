@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     serpapi_key: str = ""                     # SerpAPI alternative
 
     # ── Agent Configuration ───────────────────────────────
+    proxy_provider_api: str = ""
     agent_max_iterations: int = 10
     agent_timeout_seconds: int = 300
     approval_token_expires_hours: int = 48

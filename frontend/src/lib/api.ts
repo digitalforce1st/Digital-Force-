@@ -21,6 +21,7 @@ async function request<T>(
 ): Promise<T> {
   const token = getToken()
   const headers: Record<string, string> = {
+    'ngrok-skip-browser-warning': 'true',
     ...(options.headers as Record<string, string> || {}),
   }
 

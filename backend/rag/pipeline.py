@@ -112,7 +112,7 @@ async def parse_image(file_path: str) -> str:
         ext = Path(file_path).suffix.lstrip(".").lower()
         media_type = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
         resp = await client.chat.completions.create(
-            model="llama-3.2-90b-vision-preview",
+            model="llama-3.2-11b-vision-preview",
             messages=[{
                 "role": "user",
                 "content": [
