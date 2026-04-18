@@ -193,6 +193,8 @@ export default function ChatPage() {
       let buffer = ''
       // Track which bubble in the assistant message is currently streaming
       let activeBubbleId = firstBubbleId
+      // Keep track of the message's overarching ID to ensure DB ID sync
+      let currentMessageId = assistantId
 
       while (true) {
         const { done, value } = await reader.read()
@@ -212,32 +214,35 @@ export default function ChatPage() {
             if (chunk.type === 'thinking' || chunk.type === 'action') {
               // Append chip to the assistant message
               setMessages(prev => prev.map(m =>
-                m.id === assistantId
+                m.id === currentMessageId
                   ? { ...m, chips: [...m.chips, { type: chunk.type, content: chunk.content }] }
                   : m
               ))
             }
 
             else if (chunk.type === 'bubble_start') {
-              const newBubbleId: string = chunk.bubble_id || `${assistantId}-b${Date.now()}`
+              const newBubbleId: string = chunk.bubble_id || `${currentMessageId}-b${Date.now()}`
               activeBubbleId = newBubbleId
+              const newMsgId = chunk.bubble_id ? chunk.bubble_id : currentMessageId
+
               setMessages(prev => prev.map(m => {
-                if (m.id !== assistantId) return m
+                if (m.id !== currentMessageId) return m
                 // Don't add a duplicate if it's the initial placeholder bubble
                 const alreadyExists = m.bubbles.some(b => b.id === newBubbleId)
-                if (alreadyExists) return m
+                if (alreadyExists) return { ...m, id: newMsgId }
                 // If the initial placeholder is still empty, repurpose it
                 if (m.bubbles.length === 1 && m.bubbles[0].content === '' && m.bubbles[0].id === firstBubbleId) {
-                  return { ...m, bubbles: [{ id: newBubbleId, content: '', isStreaming: true }] }
+                  return { ...m, id: newMsgId, bubbles: [{ id: newBubbleId, content: '', isStreaming: true }] }
                 }
-                return { ...m, bubbles: [...m.bubbles, { id: newBubbleId, content: '', isStreaming: true }] }
+                return { ...m, id: newMsgId, bubbles: [...m.bubbles, { id: newBubbleId, content: '', isStreaming: true }] }
               }))
+              currentMessageId = newMsgId
             }
 
             else if (chunk.type === 'message') {
               // Stream tokens into the active bubble
               setMessages(prev => prev.map(m => {
-                if (m.id !== assistantId) return m
+                if (m.id !== currentMessageId) return m
                 return {
                   ...m,
                   bubbles: m.bubbles.map(b =>
@@ -252,7 +257,7 @@ export default function ChatPage() {
             else if (chunk.type === 'bubble_end') {
               // Mark current bubble as done streaming
               setMessages(prev => prev.map(m => {
-                if (m.id !== assistantId) return m
+                if (m.id !== currentMessageId) return m
                 return {
                   ...m,
                   bubbles: m.bubbles.map(b =>
@@ -264,7 +269,7 @@ export default function ChatPage() {
 
             else if (chunk.type === 'error') {
               setMessages(prev => prev.map(m =>
-                m.id === assistantId
+                m.id === currentMessageId
                   ? { ...m, bubbles: [{ id: firstBubbleId, content: chunk.content, isStreaming: false }] }
                   : m
               ))
@@ -275,14 +280,14 @@ export default function ChatPage() {
       }
     } catch {
       setMessages(prev => prev.map(m =>
-        m.id === assistantId
+        m.id === currentMessageId
           ? { ...m, bubbles: m.bubbles.length > 0 ? m.bubbles.map(b => ({ ...b, isStreaming: false })) : [] }
           : m
       ))
     } finally {
       // Finalize all streaming bubbles
       setMessages(prev => prev.map(m =>
-        m.id === assistantId
+        m.id === currentMessageId
           ? { ...m, bubbles: m.bubbles.map(b => ({ ...b, isStreaming: false })) }
           : m
       ))
@@ -305,8 +310,10 @@ export default function ChatPage() {
     setLastPollTime(null)
   }
 
-  const formatTime = (iso: string) =>
-    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const formatTime = (iso: string) => {
+    const validIso = iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`
+    return new Date(validIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
 
   // ── Typing dots component ─────────────────────────────────
   const TypingDots = () => (
