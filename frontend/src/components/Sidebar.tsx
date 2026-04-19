@@ -11,6 +11,7 @@ import {
 import { clearToken, getUser } from '@/lib/auth'
 import api from '@/lib/api'
 import { motion } from 'framer-motion'
+import VoiceInterface from '@/components/VoiceInterface'
 
 interface NavItem {
   href: string
@@ -228,6 +229,8 @@ export default function Sidebar() {
           <LogOut size={16} /> Disconnect
         </button>
       </div>
+
+      <VoiceInterface />
     </aside>
   )
 }

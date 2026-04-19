@@ -271,9 +271,18 @@ export default function SettingsPage() {
         body: JSON.stringify({ full_name: profileName })
       })
       if (res.ok) {
+        // Fetch the newly updated user record
+        const updatedUserResponse = await fetch(`${BASE}/api/auth/me`, { headers: authHeaders() })
+        const updatedUser = await updatedUserResponse.json()
+        
+        // Overwrite standard user cache in auth.ts space
+        localStorage.setItem('df_user', JSON.stringify(updatedUser))
+
         setProfileSaved(true)
-        setTimeout(() => setProfileSaved(false), 3000)
-        // Refresh token data if necessary, or just rely on local state
+        setTimeout(() => {
+          setProfileSaved(false)
+          window.location.reload() // Force UI sync (safest cross-component state update)
+        }, 1000)
       }
     } catch (e) {
       setError('Failed to update profile name')

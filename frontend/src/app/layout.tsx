@@ -8,7 +8,6 @@ export const metadata: Metadata = {
 }
 
 import AuthGuard from '@/components/AuthGuard'
-import GlobalVoice from '@/components/GlobalVoice'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -25,7 +24,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthGuard>
           {children}
         </AuthGuard>
-        <GlobalVoice />
       </body>
     </html>
   )
