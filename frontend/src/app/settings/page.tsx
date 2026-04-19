@@ -113,6 +113,11 @@ export default function SettingsPage() {
     label: '', time: '08:00', recurrence: 'daily', date: ''
   })
   const [addingSlot, setAddingSlot] = useState(false)
+  
+  // Custom Profile state
+  const [profileName, setProfileName] = useState('')
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileSaved, setProfileSaved] = useState(false)
 
   // Accounts state
   const [accounts, setAccounts] = useState<any[]>([])
@@ -149,6 +154,13 @@ export default function SettingsPage() {
     fetch(`${BASE}/api/accounts`, { headers: authHeaders() })
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setAccounts(data) })
+      .catch(() => {})
+      
+    fetch(`${BASE}/api/auth/me`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.full_name) setProfileName(data.full_name)
+      })
       .catch(() => {})
   }, [])
 
@@ -250,6 +262,26 @@ export default function SettingsPage() {
     window.location.reload()
   }
 
+  const handleUpdateProfile = async () => {
+    setProfileSaving(true)
+    try {
+      const res = await fetch(`${BASE}/api/auth/me`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ full_name: profileName })
+      })
+      if (res.ok) {
+        setProfileSaved(true)
+        setTimeout(() => setProfileSaved(false), 3000)
+        // Refresh token data if necessary, or just rely on local state
+      }
+    } catch (e) {
+      setError('Failed to update profile name')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'general', label: 'General', icon: Settings },
     { id: 'integrations', label: 'Integrations', icon: Cpu },
@@ -335,6 +367,15 @@ export default function SettingsPage() {
         {/* ── General ── */}
         {activeTab === 'general' && (
           <div>
+            <Section title="Operator Profile">
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '1rem', alignItems: 'end' }}>
+                <Field id="profile_name" label="Your Given Operator Name" value={profileName} onChange={setProfileName} placeholder="E.g. Chris, Director Thorne..." hint="The name the agents will address you by." />
+                <button onClick={handleUpdateProfile} disabled={profileSaving || !profileName} className="btn-primary" style={{ padding: '0.6rem 1rem', height: 42 }}>
+                  {profileSaving ? <RefreshCw size={15} className="animate-spin" /> : profileSaved ? <CheckCircle2 size={15} /> : <Save size={15} />}
+                  {profileSaved ? 'Saved' : 'Update Profile'}
+                </button>
+              </div>
+            </Section>
             <Section title="Application">
               <Field id="frontend_url" label="Frontend URL" value={form.frontend_url || ''} onChange={set('frontend_url')} placeholder="http://localhost:3000" />
               <Field id="cors_origins" label="CORS Origins" value={form.cors_origins || ''} onChange={set('cors_origins')} placeholder="http://localhost:3000,https://yourdomain.com" hint="Comma-separated list of allowed origins" />
@@ -488,8 +529,8 @@ export default function SettingsPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                 {[
-                  { label: 'Last Run', value: daemonStatus.daemon_last_ran ? new Date(daemonStatus.daemon_last_ran as string).toLocaleTimeString() : 'Not yet' },
-                  { label: 'Last Brief', value: daemonStatus.last_brief_sent ? new Date(daemonStatus.last_brief_sent as string).toLocaleTimeString() : 'Not yet' },
+                  { label: 'Last Run', value: (daemonStatus.daemon_last_ran && daemonStatus.daemon_last_ran !== 'None') ? new Date(daemonStatus.daemon_last_ran as string).toLocaleTimeString() : 'Not yet' },
+                  { label: 'Last Brief', value: (daemonStatus.last_brief_sent && daemonStatus.last_brief_sent !== 'None') ? new Date(daemonStatus.last_brief_sent as string).toLocaleTimeString() : 'Not yet' },
                   { label: 'Active Goals', value: String(daemonStatus.active_goals || 0) },
                 ].map(({ label, value }) => (
                   <div key={label} style={{ padding: '0.75rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>

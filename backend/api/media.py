@@ -54,7 +54,7 @@ async def upload_media(
 
     db.add(asset)
     await db.flush()
-    return {"id": asset_id, "url": f"/media/{filename}", "type": asset_type, "filename": file.filename}
+    return {"id": asset_id, "public_url": f"/media/{filename}", "asset_type": asset_type, "filename": filename, "original_filename": file.filename, "file_size_bytes": dest.stat().st_size}
 
 
 @router.get("")
@@ -63,8 +63,13 @@ async def list_media(asset_type: str = None, db: AsyncSession = Depends(get_db),
     result = await db.execute(q)
     assets = result.scalars().all()
     items = [{
-        "id": a.id, "filename": a.original_filename, "url": a.public_url,
-        "type": a.asset_type, "size": a.file_size_bytes,
+        "id": a.id, 
+        "filename": a.filename, 
+        "original_filename": a.original_filename, 
+        "public_url": a.public_url,
+        "asset_type": a.asset_type, 
+        "mime_type": a.mime_type,
+        "file_size_bytes": a.file_size_bytes,
         "tags": json.loads(a.manual_tags or "[]"),
         "auto_tags": json.loads(a.auto_tags or "[]"),
         "ai_description": a.ai_description,

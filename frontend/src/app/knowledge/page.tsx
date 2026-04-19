@@ -298,7 +298,7 @@ export default function KnowledgePage() {
                         
                         <div style={{ width: '100%', aspectRatio: '16/10', background: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                           {item.asset_type === 'image' && item.public_url ? (
-                            <img src={`${API_BASE}${item.public_url}`} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <img src={`/api/proxy-media${item.public_url.replace('/media/', '/')}`} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                           ) : item.asset_type === 'video' ? (
                             <Video size={36} style={{ color: '#33BAFF', opacity: 0.8 }} />
                           ) : item.asset_type === 'audio' ? (
@@ -448,13 +448,13 @@ export default function KnowledgePage() {
 
                 {selectedMedia.asset_type === 'image' && selectedMedia.public_url && (
                   <div style={{ borderRadius: 10, overflow: 'hidden', marginBottom: '1.25rem', background: 'rgba(255,255,255,0.03)' }}>
-                    <img src={`${API_BASE}${selectedMedia.public_url}`} alt="" style={{ width: '100%', height: 'auto', display: 'block' }} />
+                    <img src={`/api/proxy-media${selectedMedia.public_url.replace('/media/', '/')}`} alt="" style={{ width: '100%', height: 'auto', display: 'block' }} />
                   </div>
                 )}
                 
                 {selectedMedia.asset_type === 'video' && selectedMedia.public_url && (
                   <div style={{ borderRadius: 10, overflow: 'hidden', marginBottom: '1.25rem', background: 'rgba(255,255,255,0.03)' }}>
-                    <video src={`${API_BASE}${selectedMedia.public_url}`} controls style={{ width: '100%', height: 'auto', display: 'block' }} />
+                    <video src={`/api/proxy-media${selectedMedia.public_url.replace('/media/', '/')}`} controls style={{ width: '100%', height: 'auto', display: 'block' }} />
                   </div>
                 )}
 

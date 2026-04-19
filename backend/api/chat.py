@@ -56,9 +56,6 @@ async def chat_stream(
             yield f"data: {json.dumps({'type': 'action', 'content': 'Transmitting to Digital Force...'})}\n\n"
             await asyncio.sleep(0.1)
 
-            # 2. Build AgentState
-            from agent.graph import execution_graph
-            
             # Fetch goals or context if any
             from database import Goal
             active_goals_query = select(Goal).where(
@@ -77,31 +74,8 @@ async def chat_stream(
             hist = hist_result.scalars().all()
             hist_msgs = [{"role": m.role if m.role != "agent" else "assistant", "content": f"[{m.agent_name}]: {m.content}" if m.agent_name and m.role == "agent" else m.content} for m in reversed(hist)]
             
-            initial_state = {
-                "created_by": user_id,
-                "goal_id": active_goal.id if active_goal else None,
-                "goal_description": active_goal.description if active_goal else "Unspecified conversational inquiry.",
-                "messages": hist_msgs,
-                "tasks": json.loads(active_goal.plan).get("tasks", []) if active_goal and active_goal.plan else [],
-                "platforms": json.loads(active_goal.platforms) if active_goal and active_goal.platforms else [],
-                "asset_ids": json.loads(active_goal.assets) if active_goal and active_goal.assets else [],
-                "success_metrics": json.loads(active_goal.success_metrics) if active_goal and active_goal.success_metrics else {},
-                "constraints": json.loads(active_goal.constraints) if active_goal and active_goal.constraints else {},
-                "completed_task_ids": [],
-                "failed_task_ids": [],
-                "research_findings": {},
-                "kpi_snapshot": {},
-                "approval_status": "none",
-                "human_feedback": None,
-                "new_skills_created": [],
-                "needs_replan": False,
-                "next_agent": None,
-                "error": None,
-                "iteration_count": 0,
-                "replan_count": 0,
-                "current_task_id": None,
-                "deadline": active_goal.deadline.isoformat() if active_goal and active_goal.deadline else None,
-            }
+            # Initial state mapping natively eliminated by LangClaw. 
+            # Chat history fetched directly in chat_orchestrator using DB queries.
             
             # ---- LLM EVALUATION (INSTANT STREAMING) ----
             from agent.llm import generate_json
@@ -114,21 +88,21 @@ async def chat_stream(
             if cfg and cfg.agent_tone:
                 agent_tone = cfg.agent_tone
                 
-            prompt = f"""You are the Executive interface of Digital Force, an autonomous AI agency.
-Determine the user's intent from the following message, and reply.
+            prompt = f"""You are the central Orchestrator Hub of Digital Force, an autonomous social media marketing agency.
+You are talking to the human operator/owner of this agency. Provide a direct, highly competent, and brief response to their last message. DO NOT hallucinate technical framework specifications or claim technical difficulties.
 Your persona and tone: {agent_tone}
 
 Recent context:
 {json.dumps(hist_msgs[-4:], indent=2)}
 
-Determine if the user is asking you to start a task, create a goal, execute something, or analyze data. If yes, it requires the Manager's attention.
+Determine if the user's latest message requires running any background autonomous tools (e.g. they want you to search the web, execute a script, analyze database metrics, or launch a social media operation). If yes, set 'requires_workflow' to true. If they are just chatting or answering a question, set it to false.
 If the user is approving a previously proposed plan, mark approval_status as "approved". If rejecting, mark "rejected". Otherwise "none".
 If the user is explicitly providing credentials, a password, a 2FA code, or telling you to inherently update the 'Truth Bucket' for an account, provide the account name you detect, and the specific text to append to their auth_data bucket.
 
 Return strictly JSON:
 {{
   "reply": "Your dynamic response to the user, in character.",
-  "requires_manager": <boolean>,
+  "requires_workflow": <boolean>,
   "approval_status": "approved" | "rejected" | "none",
   "update_truth_bucket": {{
      "account_name_match": "string matching account name (e.g. 'Acme Corp') or null",
@@ -138,7 +112,7 @@ Return strictly JSON:
             try:
                 response = await generate_json(prompt)
                 reply = response.get("reply", "Acknowledged.")
-                requires_manager = response.get("requires_manager", False)
+                requires_workflow = response.get("requires_workflow", False)
                 approval_status = response.get("approval_status", "none")
                 truth_update = response.get("update_truth_bucket")
                 
@@ -154,12 +128,12 @@ Return strictly JSON:
                             await db.commit()
             except Exception as e:
                 reply = "Acknowledged. Routing internal systems to compensate."
-                requires_manager = True
+                requires_workflow = True
                 approval_status = "none"
 
             # Save the agent reply directly to DB so it persists
             bot_msg_id = str(uuid.uuid4())
-            db.add(ChatMessage(id=bot_msg_id, user_id=user_id, role="agent", agent_name="digital force - executive", content=reply, goal_id=active_goal.id if active_goal else None))
+            db.add(ChatMessage(id=bot_msg_id, user_id=user_id, role="agent", agent_name="orchestrator", content=reply, goal_id=active_goal.id if active_goal else None))
             await db.commit()
 
             # STREAM RESULT TO UI IMMEDIATELY
@@ -170,15 +144,16 @@ Return strictly JSON:
                 await asyncio.sleep(0.01)
             yield f"data: {json.dumps({'type': 'bubble_end'})}\n\n"
 
-            # Launch graph in background explicitly specifying next routing logic
-            if requires_manager:
-                initial_state["next_agent"] = "manager"
-                if approval_status in ["approved", "rejected"]:
-                    initial_state["approval_status"] = approval_status
-            else:
-                initial_state["next_agent"] = "__end__"
-                
-            asyncio.create_task(execution_graph.ainvoke(initial_state))
+            # ── Execute LangClaw God-Node (Chat Orchestrator) ──
+            from langclaw_agents.chat_orchestrator import run_chat_agent
+            
+            if approval_status == "approved" and active_goal and active_goal.status == "awaiting_approval":
+                active_goal.status = "executing"
+                active_goal.approved_by = user_id
+                active_goal.approved_at = datetime.utcnow()
+                await db.commit()
+
+            asyncio.create_task(run_chat_agent(user_id, body.message, active_goal.id if active_goal else None, requires_workflow))
             yield f"data: {json.dumps({'type': 'done', 'content': ''})}\n\n"
         except Exception as e:
             logger.error(f"[Chat] Stream error: {e}")

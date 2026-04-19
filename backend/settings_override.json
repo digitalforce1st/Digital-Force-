@@ -4,12 +4,13 @@
   "facebook_page_id": "360561740483394",
   "qdrant_url": "https://b294b9f8-d8ac-44d0-b570-be8a5f4211e3.us-east4-0.gcp.cloud.qdrant.io",
   "smtp_host": "smtp.gmail.com",
-  "smtp_port": 587,
-  "smtp_username": "admin@aiinstituteafrica.com",
+  "smtp_port": "587",
+  "smtp_username": "digitalforce1st@gmail.com",
   "smtp_from_name": "Digital Force",
   "smtp_from_email": "digitalforce1st@gmail.com",
-  "agent_max_iterations": 30,
-  "agent_timeout_seconds": 1200,
-  "smtp_password": "Rubiem@2024",
-  "target_notification_emails": "kashiribrighton@aiinstituteafrica.com"
+  "agent_max_iterations": "30",
+  "agent_timeout_seconds": "1200",
+  "smtp_password": "brqw qept enyn lhsw",
+  "target_notification_emails": "kashiribrighton@aiinstituteafrica.com",
+  "proxy_provider_api": ""
 }

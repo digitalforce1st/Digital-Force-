@@ -1,9 +1,14 @@
 import asyncio
-from fastapi import FastAPI
+import httpx
 
-app = FastAPI()
+async def check():
+    print("Testing Uvicorn...")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://localhost:8000/api/health", timeout=3.0)
+            print("Status:", resp.status_code)
+            print("Body:", resp.text)
+    except Exception as e:
+        print("Error:", e)
 
-@app.on_event("startup")
-async def startup():
-    print("LOOP POLICY:", asyncio.get_event_loop_policy())
-    print("LOOP TYPE:", type(asyncio.get_running_loop()))
+asyncio.run(check())
