@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import {
   Zap, LayoutDashboard, Target, BarChart2,
   Cpu, Settings, MessageSquare,
@@ -12,7 +11,7 @@ import {
 import { clearToken, getUser } from '@/lib/auth'
 import api from '@/lib/api'
 import { motion } from 'framer-motion'
-import VoiceInterface from '@/components/VoiceInterface'
+
 
 interface NavItem {
   href: string
@@ -231,7 +230,7 @@ export default function Sidebar() {
         </button>
       </div>
 
-      {mounted && typeof document !== 'undefined' && createPortal(<VoiceInterface />, document.body)}
+
     </aside>
   )
 }
