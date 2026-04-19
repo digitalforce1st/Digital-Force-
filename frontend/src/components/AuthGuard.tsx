@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { getToken } from '@/lib/auth'
-import VoiceInterface from '@/components/VoiceInterface'
 
 const PUBLIC_PATHS = ['/login', '/landing', '/api', '/_next']
 
@@ -47,9 +46,6 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {authorized && !PUBLIC_PATHS.some(p => pathname.startsWith(p)) && pathname !== '/' && pathname !== '/favicon.ico' && (
-        <VoiceInterface />
-      )}
       {children}
     </>
   )
