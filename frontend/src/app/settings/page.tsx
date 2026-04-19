@@ -168,7 +168,7 @@ export default function SettingsPage() {
       .catch(() => {})
 
     // Load WhatsApp status
-    fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
+    fetch(`${BASE}/api/whatsapp/status?_t=${Date.now()}`, { headers: authHeaders(), cache: 'no-store' })
       .then(r => r.json())
       .then(setWaStatus)
       .catch(() => {})
@@ -280,7 +280,7 @@ export default function SettingsPage() {
     let attempts = 0
     const poll = setInterval(async () => {
       attempts++
-      const res = await fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
+      const res = await fetch(`${BASE}/api/whatsapp/status?_t=${Date.now()}`, { headers: authHeaders(), cache: 'no-store' })
       const data = await res.json()
       setWaStatus(data)
       if (data.qr_available || data.authenticated || attempts >= 25) {

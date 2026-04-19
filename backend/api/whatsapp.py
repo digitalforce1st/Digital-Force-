@@ -39,12 +39,21 @@ async def whatsapp_status(user: dict = Depends(get_current_user)):
         except Exception:
             qr_b64 = None
 
-    return {
+    response_data = {
         "authenticated": session_exists and not qr_available,
         "session_dir_exists": session_exists,
         "qr_available": qr_available,
         "qr_image_b64": qr_b64,
     }
+    
+    return JSONResponse(
+        content=response_data,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 
 @router.post("/request-qr")
