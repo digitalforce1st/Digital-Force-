@@ -87,5 +87,14 @@ async def update_my_profile(body: ProfileUpdate, user: dict = Depends(get_curren
     db_user.full_name = body.full_name
     await db.commit()
     
-    # Return the updated metadata so frontend can update its store
-    return {"status": "success", "full_name": db_user.full_name, "email": db_user.email}
+    # Return a newly minted token so the frontend doesn't rely on the stale token payload
+    token = create_access_token({
+        "sub": db_user.id,
+        "username": db_user.username,
+        "role": db_user.role,
+        "email": db_user.email,
+        "full_name": db_user.full_name
+    })
+    
+    # Return the updated metadata along with the new token
+    return {"status": "success", "access_token": token, "full_name": db_user.full_name, "email": db_user.email}

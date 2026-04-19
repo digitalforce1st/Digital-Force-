@@ -9,9 +9,9 @@ import {
   Brain, Search
 } from 'lucide-react'
 import api from '@/lib/api'
+import { getToken, setToken } from '@/lib/auth'
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-const getToken = () => typeof window !== 'undefined' ? localStorage.getItem('token') : null
 
 type Tab = 'general' | 'integrations' | 'autonomous' | 'notifications' | 'danger'
 
@@ -273,6 +273,11 @@ export default function SettingsPage() {
       if (res.ok) {
         // Read the patch return which contains the fresh db record
         const patchResponse = await res.json()
+        
+        // If the backend sent a refreshed JWT access token with the new name, absorb it immediately
+        if (patchResponse.access_token) {
+          setToken(patchResponse.access_token)
+        }
         
         // Overwrite standard user cache in auth.ts space
         const currentUser = JSON.parse(localStorage.getItem('df_user') || '{}')
