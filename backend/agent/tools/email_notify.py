@@ -23,9 +23,7 @@ from config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Send FROM this address
-EMAIL_FROM      = settings.smtp_from_email or settings.smtp_username
-EMAIL_FROM_NAME = settings.smtp_from_name or "Digital Force"
+
 
 
 async def send_agent_email(
@@ -51,11 +49,14 @@ async def send_agent_email(
     if approval_token:
         full_subject += f" | Ref: {approval_token}"
 
+    email_from = settings.smtp_from_email or settings.smtp_username
+    email_from_name = settings.smtp_from_name or "Digital Force"
+
     msg = MIMEMultipart("alternative")
     msg["Subject"]  = full_subject
-    msg["From"]     = f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>"
+    msg["From"]     = f"{email_from_name} <{email_from}>"
     msg["To"]       = recipient
-    msg["Reply-To"] = EMAIL_FROM  # Replies come back to the FROM inbox for IMAP polling
+    msg["Reply-To"] = email_from  # Replies come back to the FROM inbox for IMAP polling
 
     msg.attach(MIMEText(body_text, "plain"))
     html = body_html or f"<html><body><pre>{body_text}</pre></body></html>"
@@ -64,7 +65,7 @@ async def send_agent_email(
     try:
         import asyncio
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _smtp_send, msg, recipient)
+        await loop.run_in_executor(None, _smtp_send, msg, recipient, email_from)
         logger.info(f"[Email] ✅ Sent '{full_subject}' to {recipient}")
         return True
     except Exception as e:
@@ -72,12 +73,12 @@ async def send_agent_email(
         return False
 
 
-def _smtp_send(msg: MIMEMultipart, recipient: str):
+def _smtp_send(msg: MIMEMultipart, recipient: str, email_from: str):
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
         server.ehlo()
         server.starttls()
         server.login(settings.smtp_username, settings.smtp_password)
-        server.sendmail(EMAIL_FROM, recipient, msg.as_string())
+        server.sendmail(email_from, recipient, msg.as_string())
 
 
 async def _generate_neural_email(context: str, user_id: str, token: Optional[str] = None) -> dict:

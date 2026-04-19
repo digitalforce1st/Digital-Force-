@@ -10,6 +10,7 @@ from datetime import datetime
 from agent.state import AgentState
 from agent.chat_push import chat_push, agent_thought_push
 from config import get_settings
+from agent.tools.whatsapp_web import send_whatsapp_message
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -158,7 +159,21 @@ async def publisher_node(state: AgentState) -> dict:
         scheduled_for = task.get("scheduled_for")
 
         try:
-            if platform in FACEBOOK_PLATFORMS:
+            if platform == "whatsapp":
+                # Extract digits from account_label (e.g. "+1 (555) 123-4567")
+                target_phone = "".join(filter(str.isdigit, task.get("account_label", "")))
+                if not target_phone:
+                     result = {"success": False, "error": "WhatsApp requires a phone number in the account_label"}
+                else:
+                     whatsapp_resp = await send_whatsapp_message(target_phone, full_text)
+                     if whatsapp_resp.get("status") == "ok":
+                          result = {"success": True, "platform_post_id": "whatsapp_ghost"}
+                     elif whatsapp_resp.get("status") == "auth_required":
+                          result = {"success": False, "error": whatsapp_resp.get("error")}
+                          await chat_push(user_id, f"🚨 **WhatsApp Auth Required!**\nPlease scan the QR code located at: `{whatsapp_resp.get('qr_path')}`")
+                     else:
+                          result = {"success": False, "error": whatsapp_resp.get("error", "WhatsApp failed")}
+            elif platform in FACEBOOK_PLATFORMS:
                 result = await _facebook_post(full_text, media_urls, scheduled_for)
             elif platform in BUFFER_PLATFORMS and buffer_profiles.get(platform):
                 profile_id = buffer_profiles[platform]

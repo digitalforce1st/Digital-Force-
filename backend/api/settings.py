@@ -182,6 +182,12 @@ async def update_settings(
     overrides.update(updates)
     _save_overrides(overrides)
 
+    from config import get_settings
+    s = get_settings()
+    for k, v in updates.items():
+        if hasattr(s, k):
+            setattr(s, k, v)
+
     logger.info(f"[Settings] Updated {list(updates.keys())} by user {user.get('sub')}")
     return {
         "status": "saved",

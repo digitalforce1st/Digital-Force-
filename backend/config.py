@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     smtp_from_name: str = "Digital Force"
     smtp_from_email: str = "noreply@digitalforce.ai"
     target_notification_emails: str = ""
+    admin_whatsapp_number: str = ""
 
     # ── SkillForge (E2B Sandbox) ──────────────────────────
     e2b_api_key: str = ""
@@ -131,4 +132,16 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Cached settings singleton — loaded once at startup."""
-    return Settings()
+    s = Settings()
+    try:
+        override_file = os.path.join(os.path.dirname(__file__), "settings_override.json")
+        if os.path.exists(override_file):
+            import json
+            with open(override_file, "r") as f:
+                data = json.load(f)
+            for k, v in data.items():
+                if hasattr(s, k):
+                    setattr(s, k, v)
+    except Exception:
+        pass
+    return s

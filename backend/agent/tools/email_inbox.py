@@ -141,6 +141,10 @@ def _check_inbox(host: str):
     except Exception as e:
         if "EOF" in str(e):
             logger.info(f"[InboxPoller] IMAP timeout/EOF (expected if no new mail). Retrying next cycle.")
+        elif "getaddrinfo failed" in str(e):
+            logger.warning(f"[InboxPoller] DNS resolution failed (getaddrinfo). Network drop or socket limit reached. Backing off 60s.")
+            import time
+            time.sleep(60)
         else:
             logger.error(f"[InboxPoller] IMAP connection failed: {e}")
 

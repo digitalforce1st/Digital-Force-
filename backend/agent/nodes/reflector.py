@@ -1,6 +1,7 @@
 """
 Digital Force — Reflector Node
 Post-campaign analysis and Episodic Memory Generation.
+Upgraded in v2.0 to also write lessons directly into agent skill markdown files.
 """
 import logging
 import uuid
@@ -15,8 +16,10 @@ logger = logging.getLogger(__name__)
 
 async def reflector_node(state: AgentState) -> dict:
     """
-    Evaluates completed campaigns to extract actionable lessons and saves them
-    into Qdrant as Episodic Memory so the Strategist never makes the same mistake twice.
+    Evaluates completed campaigns to extract actionable lessons and saves them:
+    1. Into Qdrant as Episodic Memory so the Strategist learns.
+    2. Into the relevant agent's skill markdown file so the agent directly
+       evolves its own behavior for the next campaign.
     """
     goal_id = state['goal_id']
     user_id = state.get('created_by', '')
@@ -32,43 +35,93 @@ async def reflector_node(state: AgentState) -> dict:
     plan = str(state.get("campaign_plan", {}))
     kpis = state.get("kpi_snapshot", {})
     failed_tasks = state.get("failed_task_ids", [])
-    
-    prompt = f"""You are the Reflector Node of an autonomous social media agency.
-A campaign just finished. 
+    platforms = state.get("platforms", [])
+    platform_str = ", ".join(platforms) if platforms else "unknown"
 
-Plan executing:
+    prompt = f"""You are the Reflector Node of an autonomous social media agency.
+A campaign just finished.
+
+Plan executed:
 {plan[:1500]}
 
 KPI Snapshot:
 Total Tasks: {kpis.get('total_tasks', 0)}
 Failed Tasks: {len(failed_tasks)}
+Platforms: {platform_str}
 
-Analyze the approach and extract exactly ONE core actionable "Lesson" (an episodic memory) that should be remembered for all future campaigns to improve performance. 
-Format it as a single straightforward sentence. e.g. "Using formal language on TikTok results in worse engagement, use colloquial internet slang."
-"""
+Extract TWO things:
+1. ONE core "Campaign Lesson" for the Strategist (what to do differently next campaign).
+2. ONE "Agent Refinement" — identify which specific agent made the biggest impact or mistake
+   (content_director, strategist, researcher, publisher) and what rule they should learn.
+
+Return JSON only:
+{{
+  "campaign_lesson": "A single actionable sentence about the overall campaign.",
+  "agent_refinement": {{
+    "agent": "content_director",
+    "lesson": "A specific behavioral lesson for this agent.",
+    "old_rule_hint": "Optional: a phrase from the agent's rules that should be updated, or null"
+  }}
+}}"""
+
     try:
-        lesson = await generate_completion(prompt, "You are a senior marketing strategist analyzing post-mortem data.")
-        lesson = lesson.strip(' "') # clean quotes
-        
-        # Save as Knowledge Item (Episodic Memory)
-        async with async_session() as session:
-            ki = KnowledgeItem(
-                id=str(uuid.uuid4()),
-                title=f"Episodic Memory: Goal {goal_id[:8]}",
-                source_type="text",
-                raw_content=lesson,
-                category="episodic_memory",
-                tags=json.dumps(["auto_generated", "lesson"]),
-                processing_status="processing", # ready for qdrant worker
-                uploaded_by=user_id
-            )
-            session.add(ki)
-            await session.commit()
-            
-        await agent_thought_push(user_id, "reflector", f"extracted permanent episodic memory: {lesson}.", goal_id)
-        
+        from agent.llm import generate_json
+        response = await generate_json(prompt, "You are a senior marketing strategist analyzing post-mortem data.")
+        campaign_lesson = response.get("campaign_lesson", "").strip(' "')
+        agent_refinement = response.get("agent_refinement", {})
+
+        # 1. Save campaign lesson as KnowledgeItem for Qdrant indexing
+        if campaign_lesson:
+            async with async_session() as session:
+                ki = KnowledgeItem(
+                    id=str(uuid.uuid4()),
+                    title=f"Episodic Memory: Goal {goal_id[:8]}",
+                    source_type="text",
+                    raw_content=campaign_lesson,
+                    category="episodic_memory",
+                    tags=json.dumps(["auto_generated", "lesson"]),
+                    processing_status="processing",
+                    uploaded_by=user_id
+                )
+                session.add(ki)
+                await session.commit()
+            logger.info(f"[Reflector] Saved campaign lesson to Qdrant queue: {campaign_lesson[:80]}")
+
+        # 2. Update the specific agent's skill markdown file
+        if agent_refinement and agent_refinement.get("agent") and agent_refinement.get("lesson"):
+            target_agent = agent_refinement["agent"]
+            agent_lesson = agent_refinement["lesson"]
+            old_rule_hint = agent_refinement.get("old_rule_hint")
+
+            from langclaw_agents.skill_evolver import update_skill_from_lesson, refine_skill_rule
+
+            if old_rule_hint:
+                # Surgically refine the rule in the skill file
+                await refine_skill_rule(
+                    agent_name=target_agent,
+                    old_rule_fragment=old_rule_hint,
+                    refined_rule=agent_lesson,
+                    reason=f"Post-campaign reflection on goal {goal_id[:8]}"
+                )
+            else:
+                # Append the lesson to the skill file's learned lessons section
+                await update_skill_from_lesson(
+                    agent_name=target_agent,
+                    lesson=agent_lesson,
+                    campaign_context=f"Goal: {state.get('goal_description', '')[:100]}"
+                )
+
+            logger.info(f"[Reflector] Updated {target_agent} skill file with new lesson.")
+
+        await agent_thought_push(
+            user_id=user_id,
+            agent_name="reflector",
+            context="extracted and embedded episodic memory — agents have evolved their skill files for the next campaign",
+            goal_id=goal_id
+        )
+
     except Exception as e:
         logger.error(f"[Reflector] Failed to generate episodic memory: {e}")
-        
+
     # After reflecting, the graph truly ends.
     return {"next_agent": "__end__"}

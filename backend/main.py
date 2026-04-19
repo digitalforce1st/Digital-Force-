@@ -30,6 +30,7 @@ from api.settings import router as settings_router
 from api.chat import router as chat_router
 from api.agency import router as agency_router
 from api.accounts import router as accounts_router
+from api.voice import router as voice_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,10 +67,11 @@ async def lifespan(app: FastAPI):
     from agent.browser.ghost import ghost
     await ghost.start()
 
-    # 🤖 Start the Agency Daemon — 24/7 autonomous agent heartbeat
-    from agent.agency_daemon import agency_daemon
-    asyncio.create_task(agency_daemon())
-    logger.info("🤖 Agency Daemon scheduled — Digital Force is autonomous")
+    # 🧠 Start the Internal Monologue Worker — replaces agency_daemon.py
+    # Non-blocking. Paginated. Randomized sleep. The agent is now truly alive.
+    from langclaw_agents.monologue_worker import internal_monologue
+    asyncio.create_task(internal_monologue())
+    logger.info("🧠 Internal Monologue Worker started — Digital Force 2.0 is alive")
 
     # 📧 Start the Inbox Poller — listining for user email replies
     from agent.tools.email_inbox import poll_email_inbox
@@ -88,8 +90,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Digital Force API",
-    description="Autonomous Social Media Intelligence Agency",
-    version="1.0.0",
+    description="Autonomous Social Media Intelligence Agency — v2.0",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -121,6 +123,7 @@ app.include_router(settings_router)
 app.include_router(chat_router)
 app.include_router(agency_router)
 app.include_router(accounts_router)
+app.include_router(voice_router)
 
 
 @app.get("/api/health")
@@ -128,7 +131,8 @@ async def health():
     return {
         "status": "online",
         "service": "Digital Force",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "architecture": "langclaw-hub-spoke",
         "llm": {
             "groq_1": bool(settings.groq_api_key_1),
             "groq_2": bool(settings.groq_api_key_2),

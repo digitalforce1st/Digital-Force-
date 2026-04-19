@@ -44,7 +44,10 @@ async def agency_daemon():
         try:
             await _run_cycle()
         except Exception as e:
-            logger.error(f"[Daemon] Unhandled cycle error: {e}", exc_info=True)
+            if "getaddrinfo failed" in str(e) or "Errno 11001" in str(e):
+                logger.warning(f"[Daemon] Network drop detected (DNS getaddrinfo failed). Pausing until connection restores...")
+            else:
+                logger.error(f"[Daemon] Unhandled cycle error: {e}", exc_info=True)
 
         await asyncio.sleep(DAEMON_CYCLE_SECONDS)
 

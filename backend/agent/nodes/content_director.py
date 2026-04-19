@@ -1,16 +1,22 @@
 """
 Digital Force — Content Director Agent Node
 Writes platform-optimized social media content using brand RAG context.
+Persona is loaded dynamically from skills/content_director_skill.md.
 """
 
 import json
 import logging
+from pathlib import Path
 from agent.state import AgentState
 from agent.llm import generate_completion, generate_json
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# ── Load Persona from Markdown Skill File (Prompt-as-Code) ────────────────────
+_SKILL_FILE = Path(__file__).parent.parent.parent / "skills" / "content_director_skill.md"
+_CONTENT_DIRECTOR_SKILL = _SKILL_FILE.read_text() if _SKILL_FILE.exists() else "You are an elite social media copywriter."
 
 async def _determine_platform_rules(platform: str, brief: dict) -> dict:
     """Dynamically deduce optimal platform algorithms and character constraints using the LLM."""
@@ -79,26 +85,17 @@ async def content_director_node(state: AgentState) -> dict:
     # Fetch brand voice from RAG
     brand_context = await _fetch_brand_context(state["goal_description"], platform)
 
-    system_prompt = f"""You are an elite social media copywriter specializing in {platform}.
-
-PLATFORM RULES:
-- Optimal length: {rules['optimal_chars']} characters
-- Hashtags: {rules['hashtags']} (relevant, not spammy)
-- Tone: {brief.get('tone', rules['tone_default'])}
-- Format tip: {rules['format_tip']}
-
-BRAND VOICE CONTEXT:
-{brand_context if brand_context else 'Use a professional, authoritative, inspiring voice.'}
-
-OUTPUT JSON:
-{{
-  "caption": "Main post body",
-  "hook": "First 10-15 words (the attention grabber)",
-  "hashtags": ["tag1", "tag2"],
-  "cta": "Call to action",
-  "alt_text": "Image description for accessibility",
-  "character_count": 0
-}}"""
+    # Compose system prompt from skill file (hot-reloadable) + runtime context
+    system_prompt = (
+        f"{_CONTENT_DIRECTOR_SKILL}\n\n"
+        f"## Runtime Context for this Task\n"
+        f"**Target Platform:** {platform}\n"
+        f"**Optimal Length:** {rules['optimal_chars']} characters\n"
+        f"**Hashtag Count:** {rules['hashtags']} (relevant, not spammy)\n"
+        f"**Tone:** {brief.get('tone', rules['tone_default'])}\n"
+        f"**Format Tip:** {rules['format_tip']}\n\n"
+        f"**Brand Voice Context:**\n{brand_context if brand_context else 'Use a professional, authoritative, inspiring voice.'}"
+    )
 
     user_prompt = f"""
 CAMPAIGN: {state.get('campaign_plan', {}).get('campaign_name', 'Campaign')}

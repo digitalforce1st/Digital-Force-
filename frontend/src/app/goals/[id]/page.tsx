@@ -5,6 +5,7 @@ export const runtime = 'edge'
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
+import VoiceInterface from '@/components/VoiceInterface'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -370,6 +371,7 @@ export default function GoalDetailPage() {
             </motion.div>
           </div>
         </div>
+        <VoiceInterface />
       </main>
     </div>
   )

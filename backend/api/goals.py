@@ -15,7 +15,9 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 
 from database import get_db, Goal, AgentLog
+from database import get_db, Goal, AgentLog
 from auth import get_current_user
+from agent.tools.whatsapp_web import send_whatsapp_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -43,53 +45,47 @@ class ApproveGoalRequest(BaseModel):
 # ─── Background worker ───────────────────────────────────
 
 async def run_planning_agent(goal_id: str, goal_description: str, initial_state: dict):
-    """Runs the planning graph and saves the plan to the database."""
+    """
+    Runs the Langclaw Orchestrator for the planning phase.
+    Reads from the DB by goal_id. Writes plan back to DB. No bloated state passed around.
+    """
     try:
-        from agent.graph import planning_graph
+        from langclaw_agents.orchestrator_app import run_orchestration
         from database import async_session, Goal as GoalModel, AgentLog as LogModel
         import json
 
-        logger.info(f"[PlanningAgent] Starting for goal {goal_id}")
+        logger.info(f"[PlanningAgent] Langclaw Orchestrator starting for goal {goal_id}")
 
-        final_state = await planning_graph.ainvoke(initial_state)
+        result = await run_orchestration(goal_id, trigger_source="goal_create")
+
+        if result.get("status") == "error":
+            raise Exception(result.get("error", "Orchestration failed"))
 
         async with async_session() as db:
             goal = await db.get(GoalModel, goal_id)
-            if goal:
-                plan = final_state.get("campaign_plan", {})
-                tasks = final_state.get("tasks", [])
-                plan["tasks"] = tasks
-
-                # Assign IDs to tasks
-                for t in tasks:
-                    if not t.get("id"):
-                        t["id"] = str(uuid.uuid4())
-
-                goal.plan = json.dumps(plan)
-                goal.platforms = json.dumps(final_state.get("platforms", []))
-                goal.success_metrics = json.dumps(final_state.get("success_metrics", {}))
-                goal.tasks_total = len(tasks)
+            if goal and goal.status == "planning":
+                # The orchestrator writes tasks. We just move to awaiting_approval.
                 goal.status = "awaiting_approval"
                 goal.approval_token = secrets.token_urlsafe(32)
 
-                # Log agent messages
-                for msg in final_state.get("messages", []):
-                    log = LogModel(
-                        goal_id=goal_id,
-                        agent=msg.get("role", "system"),
-                        level="info",
-                        thought=msg.get("content", ""),
-                    )
-                    db.add(log)
-
+                # Log completion
+                log = LogModel(
+                    goal_id=goal_id,
+                    agent="orchestrator",
+                    level="info",
+                    thought=f"Plan generated: {result.get('tasks_generated', 0)} tasks across {result.get('content_generated', 0)} content pieces.",
+                )
+                db.add(log)
                 await db.commit()
-                logger.info(f"[PlanningAgent] Plan saved for goal {goal_id}. {len(tasks)} tasks planned.")
 
-                # Send approval notification
+                # Load plan for email notification
+                plan = json.loads(goal.plan or "{}") if goal.plan else {}
                 await _send_approval_notification(goal_id, goal.approval_token, plan)
 
+        logger.info(f"[PlanningAgent] Complete for goal {goal_id}")
+
     except Exception as e:
-        logger.error(f"[PlanningAgent] Failed for goal {goal_id}: {e}")
+        logger.error(f"[PlanningAgent] Failed for goal {goal_id}: {e}", exc_info=True)
         async with async_session() as db:
             goal = await db.get(Goal, goal_id)
             if goal:
@@ -150,6 +146,20 @@ async def _send_approval_notification(goal_id: str, token: str, plan: dict):
         logger.info(f"[Notify] Approval email sent for goal {goal_id}")
     except Exception as e:
         logger.warning(f"[Notify] Email failed: {e}")
+
+    try:
+        from config import get_settings
+        s = get_settings()
+        if s.admin_whatsapp_number:
+            logger.info(f"[Notify] Attempting WhatsApp broadcast to Admin: {s.admin_whatsapp_number}")
+            text_body = f"🤖 *Digital Force Alert*\nYour campaign `{campaign_name}` is ready for approval.\n\nTasks: {task_count}\n\nReview & Authorize: {review_url}"
+            wa_res = await send_whatsapp_message(s.admin_whatsapp_number, text_body)
+            if wa_res.get("status") == "ok":
+                logger.info(f"[Notify] WhatsApp Admin Notification Sent.")
+            else:
+                 logger.warning(f"[Notify] WhatsApp Admin Notification Skipped: {wa_res.get('error')}")
+    except Exception as e:
+        logger.warning(f"[Notify] WhatsApp failed: {e}")
 
 
 # ─── Routes ──────────────────────────────────────────────
@@ -349,46 +359,38 @@ async def approve_goal(
 
 
 async def _run_execution_agent(goal_id: str):
-    """Launch the execution graph for an approved goal."""
+    """
+    Launch the Langclaw Orchestrator for an approved goal's execution phase.
+    Reads the approved plan from DB. Dispatches content + publish spokes.
+    """
     try:
-        from agent.graph import execution_graph
+        from langclaw_agents.orchestrator_app import run_orchestration
         from database import async_session, Goal as GoalModel
-        import json
 
-        async with async_session() as db:
-            goal = await db.get(GoalModel, goal_id)
-            if not goal:
-                return
-            plan = json.loads(goal.plan or "{}")
-
-        state = {
-            "goal_id": goal_id,
-            "goal_description": goal.description,
-            "platforms": json.loads(goal.platforms or "[]"),
-            "asset_ids": json.loads(goal.assets or "[]"),
-            "success_metrics": json.loads(goal.success_metrics or "{}"),
-            "constraints": json.loads(goal.constraints or "{}"),
-            "campaign_plan": plan,
-            "tasks": plan.get("tasks", []),
-            "messages": [], "research_findings": {},
-            "completed_task_ids": [], "failed_task_ids": [],
-            "kpi_snapshot": {}, "needs_replan": False,
-            "approval_status": "approved", "human_feedback": None,
-            "new_skills_created": [], "next_agent": None, "error": None,
-            "iteration_count": 0, "replan_count": 0, "current_task_id": None, "deadline": None,
-        }
-
-        await execution_graph.ainvoke(state)
-        logger.info(f"[ExecutionAgent] Completed for goal {goal_id}")
+        logger.info(f"[ExecutionAgent] Langclaw Orchestrator starting execution for goal {goal_id}")
+        result = await run_orchestration(goal_id, trigger_source="goal_approve")
 
         async with async_session() as db:
             goal = await db.get(GoalModel, goal_id)
             if goal:
-                goal.status = "monitoring"
+                if result.get("status") == "ok":
+                    goal.status = "monitoring"
+                    logger.info(f"[ExecutionAgent] Goal {goal_id} execution complete. Moving to monitoring.")
+                else:
+                    # Partial failure — mark as monitoring anyway, monologue worker will retry
+                    goal.status = "monitoring"
+                    logger.warning(f"[ExecutionAgent] Goal {goal_id} execution finished with warnings: {result.get('error')}")
                 await db.commit()
 
     except Exception as e:
-        logger.error(f"[ExecutionAgent] Failed for goal {goal_id}: {e}")
+        logger.error(f"[ExecutionAgent] Failed for goal {goal_id}: {e}", exc_info=True)
+        async with async_session() as db:
+            from database import Goal as GoalModel
+            goal = await db.get(GoalModel, goal_id)
+            if goal:
+                # Do NOT mark as failed — mark as monitoring so the monologue worker retries
+                goal.status = "monitoring"
+                await db.commit()
 
 
 @router.get("/approve/{token}")
