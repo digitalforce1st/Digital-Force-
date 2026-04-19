@@ -31,6 +31,7 @@ from api.chat import router as chat_router
 from api.agency import router as agency_router
 from api.accounts import router as accounts_router
 from api.voice import router as voice_router
+from api.whatsapp import router as whatsapp_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,6 +143,11 @@ media_dir = Path(settings.media_upload_dir)
 media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
 
+# Static files for QR codes (WhatsApp auth)
+qr_dir = Path("./media/qr_codes")
+qr_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/qr", StaticFiles(directory=str(qr_dir)), name="qr_codes")
+
 # Routers
 app.include_router(auth_router)
 app.include_router(goals_router)
@@ -155,6 +161,7 @@ app.include_router(chat_router)
 app.include_router(agency_router)
 app.include_router(accounts_router)
 app.include_router(voice_router)
+app.include_router(whatsapp_router)
 
 
 @app.get("/api/health")

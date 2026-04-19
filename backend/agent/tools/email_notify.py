@@ -77,7 +77,8 @@ def _smtp_send(msg: MIMEMultipart, recipient: str, email_from: str):
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
         server.ehlo()
         server.starttls()
-        server.login(settings.smtp_username, settings.smtp_password)
+        # Strip spaces from Gmail App Passwords (e.g. 'xxxx xxxx xxxx xxxx')
+        server.login(settings.smtp_username, settings.smtp_password.replace(" ", ""))
         server.sendmail(email_from, recipient, msg.as_string())
 
 

@@ -6,7 +6,7 @@ import {
   Settings, Cpu, Bell, AlertTriangle, Eye, EyeOff,
   Save, CheckCircle2, AlertCircle, RefreshCw, Trash2,
   Zap, Plus, Clock, X, ToggleLeft, ToggleRight,
-  Brain, Search
+  Brain, Search, MessageCircle, ShieldCheck, QrCode
 } from 'lucide-react'
 import api from '@/lib/api'
 import { getToken, setToken } from '@/lib/auth'
@@ -124,6 +124,10 @@ export default function SettingsPage() {
   const [addingAccount, setAddingAccount] = useState(false)
   const [newAccount, setNewAccount] = useState({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
 
+  // WhatsApp auth state
+  const [waStatus, setWaStatus] = useState<{ authenticated: boolean; qr_available: boolean; qr_image_b64: string | null }>({ authenticated: false, qr_available: false, qr_image_b64: null })
+  const [waLoading, setWaLoading] = useState(false)
+
   useEffect(() => {
     Promise.all([api.settings.get(), api.settings.status()])
       .then(([settings, st]) => {
@@ -162,6 +166,12 @@ export default function SettingsPage() {
         if (data && data.full_name) setProfileName(data.full_name)
       })
       .catch(() => {})
+
+    // Load WhatsApp status
+    fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(setWaStatus)
+      .catch(() => {})
   }, [])
 
   const authHeaders = () => {
@@ -179,7 +189,8 @@ export default function SettingsPage() {
         'buffer_access_token','facebook_page_id','facebook_access_token',
         'qdrant_url','qdrant_api_key','smtp_host','smtp_port','smtp_username',
         'smtp_password','smtp_from_name','smtp_from_email','target_notification_emails','frontend_url',
-        'cors_origins','agent_max_iterations','agent_timeout_seconds', 'proxy_provider_api']
+        'cors_origins','agent_max_iterations','agent_timeout_seconds', 'proxy_provider_api',
+        'admin_whatsapp_number']
       for (const key of saveable) {
         if (form[key] !== undefined && !form[key].includes('•')) payload[key] = form[key]
       }
@@ -260,6 +271,28 @@ export default function SettingsPage() {
     await api.settings.resetOverrides()
     setShowDangerConfirm(false)
     window.location.reload()
+  }
+
+  const handleRequestWaQr = async () => {
+    setWaLoading(true)
+    await fetch(`${BASE}/api/whatsapp/request-qr`, { method: 'POST', headers: authHeaders() })
+    // Poll status every 3s for up to 30s
+    let attempts = 0
+    const poll = setInterval(async () => {
+      attempts++
+      const res = await fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
+      const data = await res.json()
+      setWaStatus(data)
+      if (data.qr_available || data.authenticated || attempts >= 10) {
+        clearInterval(poll)
+        setWaLoading(false)
+      }
+    }, 3000)
+  }
+
+  const handleClearWaSession = async () => {
+    await fetch(`${BASE}/api/whatsapp/clear-session`, { method: 'POST', headers: authHeaders() })
+    setWaStatus({ authenticated: false, qr_available: false, qr_image_b64: null })
   }
 
   const handleUpdateProfile = async () => {
@@ -793,6 +826,79 @@ export default function SettingsPage() {
                 For Gmail: Enable 2FA, then generate an App Password at myaccount.google.com/apppasswords
               </div>
             </Section>
+
+            {/* ── WhatsApp Auth Panel ── */}
+            <div className="glass-panel" style={{ padding: '1.5rem', border: waStatus.authenticated ? '1px solid rgba(52,211,153,0.25)' : '1px solid rgba(37,211,102,0.15)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <MessageCircle size={18} color={waStatus.authenticated ? '#34D399' : '#25D166'} />
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#fff' }}>WhatsApp Notifications</div>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '0.2rem 0.6rem',
+                    borderRadius: 20, fontSize: '0.72rem', fontWeight: 600,
+                    background: waStatus.authenticated ? 'rgba(52,211,153,0.12)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${waStatus.authenticated ? 'rgba(52,211,153,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                    color: waStatus.authenticated ? '#34D399' : 'rgba(255,255,255,0.35)',
+                  }}>
+                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: waStatus.authenticated ? '#34D399' : 'rgba(255,255,255,0.25)' }} />
+                    {waStatus.authenticated ? 'Authenticated' : 'Not connected'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {waStatus.authenticated && (
+                    <button id="wa-clear-session" onClick={handleClearWaSession}
+                      style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0.35rem 0.75rem', borderRadius: 8,
+                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                        color: '#FCA5A5', fontSize: '0.78rem', cursor: 'pointer' }}>
+                      <Trash2 size={12} /> Disconnect
+                    </button>
+                  )}
+                  <button id="wa-request-qr" onClick={handleRequestWaQr} disabled={waLoading}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0.35rem 0.875rem', borderRadius: 8,
+                      background: 'rgba(37,209,102,0.12)', border: '1px solid rgba(37,209,102,0.25)',
+                      color: '#25D166', fontSize: '0.78rem', cursor: waLoading ? 'wait' : 'pointer', opacity: waLoading ? 0.7 : 1 }}>
+                    {waLoading ? <RefreshCw size={12} className="animate-spin" /> : <QrCode size={12} />}
+                    {waLoading ? 'Generating QR...' : waStatus.authenticated ? 'Re-authenticate' : 'Connect WhatsApp'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Phone number field */}
+              <div style={{ marginBottom: '1rem' }}>
+                <Field id="admin_whatsapp_number" label="Admin WhatsApp Number (with country code)" value={form.admin_whatsapp_number || ''} onChange={set('admin_whatsapp_number')} placeholder="+263786271564" hint="The number to receive campaign approval alerts via WhatsApp." />
+              </div>
+
+              {/* QR Code display */}
+              {!waStatus.authenticated && waStatus.qr_image_b64 && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1.5rem', background: 'rgba(255,255,255,0.03)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.5)', textAlign: 'center' }}>
+                    Open <strong style={{ color: '#fff' }}>WhatsApp</strong> on your phone → Three Dots → Linked Devices → Link a Device → scan below
+                  </div>
+                  <div style={{ padding: 12, background: '#fff', borderRadius: 12 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={`data:image/png;base64,${waStatus.qr_image_b64}`} alt="WhatsApp QR Code" style={{ width: 220, height: 220, display: 'block' }} />
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <RefreshCw size={11} />
+                    QR codes expire in ~60 seconds. Click "Connect WhatsApp" to refresh.
+                  </div>
+                </div>
+              )}
+
+              {!waStatus.authenticated && !waStatus.qr_image_b64 && (
+                <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.35)', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <QrCode size={16} color="rgba(255,255,255,0.2)" />
+                  Click <strong style={{ color: '#25D166' }}>Connect WhatsApp</strong> to generate a QR code and link your phone.
+                </div>
+              )}
+
+              {waStatus.authenticated && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0.875rem 1rem', background: 'rgba(52,211,153,0.06)', borderRadius: 10, border: '1px solid rgba(52,211,153,0.15)' }}>
+                  <ShieldCheck size={16} color="#34D399" />
+                  <div style={{ fontSize: '0.82rem', color: '#34D399' }}>WhatsApp Web is authenticated. Campaign approval alerts will be sent to your phone.</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

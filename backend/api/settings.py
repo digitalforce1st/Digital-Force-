@@ -65,6 +65,9 @@ class SettingsUpdate(BaseModel):
     smtp_from_email: Optional[str] = None
     target_notification_emails: Optional[str] = None
 
+    # WhatsApp
+    admin_whatsapp_number: Optional[str] = None
+
     # Agent
     agent_max_iterations: Optional[Union[int, str]] = None
     agent_timeout_seconds: Optional[Union[int, str]] = None
@@ -139,6 +142,9 @@ async def get_settings(user: dict = Depends(get_current_user)):
         "smtp_from_name": s.smtp_from_name,
         "smtp_from_email": s.smtp_from_email,
         "target_notification_emails": s.target_notification_emails,
+
+        # WhatsApp
+        "admin_whatsapp_number": s.admin_whatsapp_number,
 
         # Agent
         "agent_max_iterations": s.agent_max_iterations,

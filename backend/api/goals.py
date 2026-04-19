@@ -128,22 +128,30 @@ async def _send_approval_notification(goal_id: str, token: str, plan: dict):
         </body></html>
         """
 
+        # Send to configured notification address, or fall back to the SMTP sender account
+        recipient = (
+            s.target_notification_emails.split(",")[0].strip()
+            if s.target_notification_emails
+            else s.smtp_username
+        )
+
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"[Digital Force] Plan Ready: {campaign_name} ({task_count} tasks)"
         msg["From"] = f"{s.smtp_from_name} <{s.smtp_from_email}>"
-        msg["To"] = s.smtp_username
+        msg["To"] = recipient
         msg.attach(MIMEText(body, "html"))
 
         def _send():
             with smtplib.SMTP(s.smtp_host, s.smtp_port) as server:
+                server.ehlo()
                 server.starttls()
                 server.login(s.smtp_username, s.smtp_password.replace(" ", ""))
-                server.send_message(msg)
-                
+                server.sendmail(s.smtp_from_email, recipient, msg.as_string())
+
         import asyncio
         await asyncio.to_thread(_send)
 
-        logger.info(f"[Notify] Approval email sent for goal {goal_id}")
+        logger.info(f"[Notify] Approval email sent to {recipient} for goal {goal_id}")
     except Exception as e:
         logger.warning(f"[Notify] Email failed: {e}")
 
@@ -151,9 +159,12 @@ async def _send_approval_notification(goal_id: str, token: str, plan: dict):
         from config import get_settings
         s = get_settings()
         if s.admin_whatsapp_number:
-            logger.info(f"[Notify] Attempting WhatsApp broadcast to Admin: {s.admin_whatsapp_number}")
+            # Sanitize phone number: strip spaces and non-digit chars (keep leading +)
+            raw_number = s.admin_whatsapp_number.strip()
+            sanitized_number = "+" + "".join(filter(str.isdigit, raw_number)) if raw_number.startswith("+") else "".join(filter(str.isdigit, raw_number))
+            logger.info(f"[Notify] Attempting WhatsApp broadcast to Admin: {sanitized_number}")
             text_body = f"🤖 *Digital Force Alert*\nYour campaign `{campaign_name}` is ready for approval.\n\nTasks: {task_count}\n\nReview & Authorize: {review_url}"
-            wa_res = await send_whatsapp_message(s.admin_whatsapp_number, text_body)
+            wa_res = await send_whatsapp_message(sanitized_number, text_body)
             if wa_res.get("status") == "ok":
                 logger.info(f"[Notify] WhatsApp Admin Notification Sent.")
             else:
