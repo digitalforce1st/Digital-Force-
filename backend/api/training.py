@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from database import get_db, KnowledgeItem
 from auth import get_current_user
@@ -148,20 +148,26 @@ async def upload_knowledge(
 @router.post("/url")
 async def ingest_url(
     background_tasks: BackgroundTasks,
-    body: dict,
+    url: str = Form(...),
+    category: str = Form("other"),
+    tags: str = Form("[]"),
+    title: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Quick URL ingestion endpoint."""
-    url = body.get("url")
+    """Quick URL ingestion endpoint — accepts multipart form data."""
     if not url:
         raise HTTPException(400, "URL required")
+    tags_list = json.loads(tags) if tags else []
     item_id = str(uuid.uuid4())
     item = KnowledgeItem(
-        id=item_id, title=url, source_type="url",
-        source_path=url, source_url=url,
-        category=body.get("category", "other"),
-        tags=json.dumps(body.get("tags", [])),
+        id=item_id,
+        title=title or url,
+        source_type="url",
+        source_path=url,
+        source_url=url,
+        category=category,
+        tags=json.dumps(tags_list),
         processing_status="processing",
         uploaded_by=user.get("sub"),
     )
@@ -169,9 +175,9 @@ async def ingest_url(
     await db.flush()
     background_tasks.add_task(
         _process_knowledge_item, item_id, "url", url,
-        url, body.get("category", "other"), body.get("tags", [])
+        title or url, category, tags_list
     )
-    return {"id": item_id, "status": "processing"}
+    return {"id": item_id, "status": "processing", "message": "URL is being scraped and indexed into the knowledge base."}
 
 
 @router.get("")

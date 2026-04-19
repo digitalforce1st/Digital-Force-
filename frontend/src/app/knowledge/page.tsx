@@ -88,6 +88,7 @@ export default function KnowledgePage() {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [success, setSuccess] = useState('')
+  const [error, setError] = useState('')
 
   const loadAll = async () => {
     setLoading(true)
@@ -111,14 +112,15 @@ export default function KnowledgePage() {
     setDocItems(prev => prev.filter(d => d.id !== id))
   }
 
-  const showSuccess = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 4000) }
+  const showSuccess = (msg: string) => { setSuccess(msg); setError(''); setTimeout(() => setSuccess(''), 5000) }
+  const showError = (msg: string) => { setError(msg); setSuccess(''); setTimeout(() => setError(''), 7000) }
 
   const handleFile = async (file: File) => {
     setUploading(true)
     const fd = new FormData()
     fd.append('file', file); fd.append('title', title || file.name)
     try { await api.training.upload(fd); showSuccess(`"${file.name}" indexed successfully`); loadAll() }
-    catch (e) { console.error(e) } finally { setUploading(false) }
+    catch (e: any) { showError(e?.message || 'Upload failed') } finally { setUploading(false) }
   }
 
   const handleMedia = async (file: File) => {
@@ -141,8 +143,33 @@ export default function KnowledgePage() {
   const handleUrlIngest = async () => {
     if (!url.trim()) return
     setUploading(true)
-    try { await api.training.uploadUrl(url.trim(), 'other'); showSuccess('URL ingested and indexed'); setUrl(''); loadAll() }
-    catch (e) { console.error(e) } finally { setUploading(false) }
+    try {
+      // Send as FormData to match the backend Form(...) parameters
+      const fd = new FormData()
+      fd.append('url', url.trim())
+      fd.append('title', title.trim() || url.trim())
+      fd.append('category', 'other')
+      fd.append('tags', '[]')
+      const token = typeof window !== 'undefined' ? localStorage.getItem('df_token') : null
+      const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const res = await fetch(`${BASE}/api/training/url`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.detail || `HTTP ${res.status}`)
+      }
+      showSuccess('URL queued for scraping and indexing')
+      setUrl('')
+      setTitle('')
+      // Poll for completion
+      setTimeout(() => loadAll(), 3000)
+      setTimeout(() => loadAll(), 8000)
+    } catch (e: any) {
+      showError(e?.message || 'Failed to ingest URL')
+    } finally { setUploading(false) }
   }
 
   const handleTextIngest = async () => {
@@ -151,7 +178,7 @@ export default function KnowledgePage() {
     const fd = new FormData()
     fd.append('raw_text', rawText.trim()); fd.append('title', title || 'Note')
     try { await api.training.upload(fd); showSuccess('Note indexed to Knowledge'); setRawText(''); setTitle(''); loadAll() }
-    catch (e) { console.error(e) } finally { setUploading(false) }
+    catch (e: any) { showError(e?.message || 'Failed to save note') } finally { setUploading(false) }
   }
 
   const filteredDocs = docItems.filter(d => d.title.toLowerCase().includes(search.toLowerCase()))
@@ -415,6 +442,12 @@ export default function KnowledgePage() {
                       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                         style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: 8, padding: '0.625rem 0.875rem', borderRadius: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', color: '#34D399', fontSize: '0.8rem', fontWeight: 600 }}>
                         <CheckCircle2 size={14} /> {success}
+                      </motion.div>
+                    )}
+                    {error && (
+                      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                        style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: 8, padding: '0.625rem 0.875rem', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#F87171', fontSize: '0.8rem', fontWeight: 600 }}>
+                        <AlertCircle size={14} /> {error}
                       </motion.div>
                     )}
                   </AnimatePresence>

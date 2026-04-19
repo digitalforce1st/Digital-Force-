@@ -82,19 +82,44 @@ async def parse_tabular(file_path: str) -> str:
 
 
 async def parse_url(url: str) -> str:
-    """Scrape and clean text from a URL."""
+    """Scrape and clean text from a URL with robust fallback parsing."""
     try:
         import httpx
         from bs4 import BeautifulSoup
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+
+        # Try lxml first, fall back to html.parser
+        try:
             soup = BeautifulSoup(resp.text, "lxml")
-            # Remove noise
-            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-                tag.decompose()
-            return soup.get_text(separator="\n", strip=True)[:50000]
+        except Exception:
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Remove noise tags
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript", "svg"]):
+            tag.decompose()
+
+        # Prefer article/main content if available
+        main = soup.find("article") or soup.find("main") or soup.find("body") or soup
+        text = main.get_text(separator="\n", strip=True)
+
+        # Collapse multiple blank lines
+        import re
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        if len(text) < 50:
+            logger.warning(f"[RAG] URL returned very little content ({len(text)} chars): {url}")
+
+        return text[:60000]
     except Exception as e:
-        logger.error(f"URL parse error ({url}): {e}")
+        logger.error(f"[RAG] URL parse error ({url}): {e}")
         return ""
 
 
