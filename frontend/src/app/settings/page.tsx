@@ -271,17 +271,18 @@ export default function SettingsPage() {
         body: JSON.stringify({ full_name: profileName })
       })
       if (res.ok) {
-        // Fetch the newly updated user record
-        const updatedUserResponse = await fetch(`${BASE}/api/auth/me`, { headers: authHeaders() })
-        const updatedUser = await updatedUserResponse.json()
+        // Read the patch return which contains the fresh db record
+        const patchResponse = await res.json()
         
         // Overwrite standard user cache in auth.ts space
+        const currentUser = JSON.parse(localStorage.getItem('df_user') || '{}')
+        const updatedUser = { ...currentUser, full_name: patchResponse.full_name }
         localStorage.setItem('df_user', JSON.stringify(updatedUser))
 
         setProfileSaved(true)
         setTimeout(() => {
           setProfileSaved(false)
-          window.location.reload() // Force UI sync (safest cross-component state update)
+          window.location.reload() // Force UI sync
         }, 1000)
       }
     } catch (e) {

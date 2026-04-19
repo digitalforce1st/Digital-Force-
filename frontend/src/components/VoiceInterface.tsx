@@ -64,9 +64,16 @@ export default function VoiceInterface() {
 
     // Cleanup on unmount or close
     return () => {
-      if (!isOpen && wsRef.current) {
+      if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
     };
   }, [isOpen]);

@@ -371,7 +371,6 @@ export default function GoalDetailPage() {
             </motion.div>
           </div>
         </div>
-        <VoiceInterface />
       </main>
     </div>
   )

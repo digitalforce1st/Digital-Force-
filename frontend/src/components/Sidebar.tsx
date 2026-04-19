@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Zap, LayoutDashboard, Target, BarChart2,
   Cpu, Settings, MessageSquare,
@@ -230,7 +231,7 @@ export default function Sidebar() {
         </button>
       </div>
 
-      <VoiceInterface />
+      {mounted && typeof document !== 'undefined' && createPortal(<VoiceInterface />, document.body)}
     </aside>
   )
 }
