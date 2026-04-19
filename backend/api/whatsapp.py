@@ -68,14 +68,19 @@ async def request_whatsapp_qr(user: dict = Depends(get_current_user)):
 
             # Wait for QR canvas or the chat UI (if already authed)
             try:
+                # Give the page a bit more time to render JS
+                await page.wait_for_timeout(5000)
+
                 element = await page.wait_for_selector(
-                    'canvas[aria-label="Scan me!"], div[title="Type a message"]',
+                    'canvas, div[title="Type a message"], div[data-testid="chat-list"]',
                     timeout=30000,
                 )
                 tag = await element.evaluate("el => el.tagName.toLowerCase()")
 
                 if tag == "canvas":
                     QR_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    # We might need to grab the closest parent to get a clean crop, 
+                    # but canvas usually draws exactly the QR bounds.
                     await element.screenshot(path=str(QR_PATH))
                     logger.info(f"[WhatsApp QR] QR code captured → {QR_PATH}")
                 else:
@@ -85,6 +90,10 @@ async def request_whatsapp_qr(user: dict = Depends(get_current_user)):
                     logger.info("[WhatsApp QR] Session is already authenticated!")
             except Exception as e:
                 logger.warning(f"[WhatsApp QR] Timeout waiting for page: {e}")
+                # Capture the state of the page so we can debug!
+                debug_path = QR_PATH.parent / "whatsapp_debug_screenshot.png"
+                await page.screenshot(path=str(debug_path))
+                logger.info(f"[WhatsApp QR] Debug page screenshot grabbed → {debug_path}")
 
             await page.close()
         except Exception as e:

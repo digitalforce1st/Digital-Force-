@@ -283,7 +283,7 @@ export default function SettingsPage() {
       const res = await fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
       const data = await res.json()
       setWaStatus(data)
-      if (data.qr_available || data.authenticated || attempts >= 10) {
+      if (data.qr_available || data.authenticated || attempts >= 25) {
         clearInterval(poll)
         setWaLoading(false)
       }
