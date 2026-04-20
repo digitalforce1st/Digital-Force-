@@ -810,8 +810,6 @@ export default function SettingsPage() {
                 For Gmail: Enable 2FA, then generate an App Password at myaccount.google.com/apppasswords
               </div>
             </Section>
-
-            </Section>
           </div>
         )}
 
