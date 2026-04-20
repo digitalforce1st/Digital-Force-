@@ -88,6 +88,14 @@ async def lifespan(app: FastAPI):
             "Walled-garden research will fall back to web search. Non-fatal."
         )
 
+    # 📅 Start the Post Scheduler — queue-based async publisher with rate limiting
+    try:
+        from scheduler import scheduler
+        await scheduler.start()
+        logger.info("📅 Post Scheduler started — rate-limited parallel publishing active")
+    except Exception as e:
+        logger.warning(f"⚠️  Post Scheduler failed to start ({e}). Non-fatal.")
+
     # 🧠 Start the Internal Monologue Worker — replaces agency_daemon.py
     # Non-blocking. Paginated. Randomized sleep. The agent is now truly alive.
     # GC-SAFE: pinned in _STARTUP_TASKS until the task completes (it never does — infinite loop).
@@ -111,7 +119,17 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Digital Force shutting down...")
     
     # Clean up browser persistence
-    await ghost.stop()
+    try:
+        await ghost.stop()
+    except Exception:
+        pass
+
+    # Stop the scheduler gracefully
+    try:
+        from scheduler import scheduler
+        await scheduler.stop()
+    except Exception:
+        pass
 
 
 app = FastAPI(

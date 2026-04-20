@@ -20,6 +20,7 @@ that the Ghost Browser uses to maintain authenticated sessions.
 import json
 import logging
 from typing import List, Optional
+from datetime import datetime
 from agent.state import AgentState
 from config import get_settings
 
@@ -70,6 +71,127 @@ async def _mark_account_needs_reauth(account_id: str):
                 await db.commit()
     except Exception as e:
         logger.warning(f"[Publisher] Could not update account status: {e}")
+
+
+# ── Main Publisher Node ────────────────────────────────────────────────────────
+
+async def publisher_node(state: AgentState) -> dict:
+    """
+    Publisher node — enqueues all post_content tasks into the PostScheduler.
+
+    The scheduler handles:
+    - Platform rate limits (no platform bans)
+    - Concurrency control (max 3 posts at once, not 500)
+    - Time distribution across the day
+    - Automatic retry on failure
+    - Progress updates to chat
+
+    This node returns IMMEDIATELY. Posts execute in the background over time.
+    This means the orchestrator doesn't get blocked waiting for 500 posts to finish.
+    """
+    from agent.chat_push import chat_push, agent_thought_push
+    from scheduler import scheduler
+
+    goal_id = state.get("goal_id", "")
+    user_id = state.get("created_by", "")
+    tasks = state.get("tasks", [])
+    completed_ids = list(state.get("completed_task_ids", []))
+    failed_ids = list(state.get("failed_task_ids", []))
+
+    post_tasks = [
+        t for t in tasks
+        if t.get("task_type") == "post_content"
+        and t.get("id") not in completed_ids
+        and t.get("id") not in failed_ids
+    ]
+
+    if not post_tasks:
+        return {
+            "completed_task_ids": completed_ids,
+            "failed_task_ids": failed_ids,
+            "tasks": tasks,
+            "next_agent": "orchestrator",
+            "messages": [{"role": "assistant", "name": "publisher", "content": "No publishable content tasks pending."}],
+        }
+
+    total_enqueued = 0
+    total_skipped = 0
+
+    for task in post_tasks:
+        platform = task.get("platform", "").lower()
+        content_result = task.get("result", {})
+
+        if not content_result:
+            failed_ids.append(task.get("id"))
+            task["error"] = "No content result — ContentDirector did not produce output"
+            total_skipped += 1
+            continue
+
+        hook = content_result.get("hook", "")
+        body = content_result.get("body", "")
+        cta = content_result.get("call_to_action", "")
+        hashtags = " ".join(content_result.get("hashtags", []))
+        post_text = "\n\n".join(filter(None, [hook, body, cta, hashtags])).strip()
+        media_urls: List[str] = content_result.get("media_urls", [])
+
+        accounts = await _get_accounts_for_platform(platform)
+
+        if not accounts:
+            failed_ids.append(task.get("id"))
+            task["error"] = f"No {platform} accounts configured in Truth Bucket"
+            total_skipped += 1
+            continue
+
+        # Enqueue one job per account — scheduler handles the timing
+        for account in accounts:
+            scheduled_for = None
+            raw_time = task.get("scheduled_for")
+            if raw_time:
+                try:
+                    from datetime import datetime
+                    scheduled_for = datetime.fromisoformat(raw_time)
+                except Exception:
+                    pass
+
+            await scheduler.enqueue(
+                goal_id=goal_id,
+                task_id=task.get("id", ""),
+                account_id=account["id"],
+                platform=platform,
+                post_text=post_text,
+                media_urls=media_urls,
+                user_id=user_id,
+                scheduled_for=scheduled_for,
+                account=account,
+            )
+            total_enqueued += 1
+
+        # Mark task as "queued" — scheduler will mark it completed when done
+        task["status"] = "queued"
+        completed_ids.append(task.get("id"))
+
+    queue_depth = scheduler.queue_size
+    summary = (
+        f"Enqueued {total_enqueued} post job(s) across {len(post_tasks)} tasks. "
+        f"Scheduler queue depth: {queue_depth}. "
+        f"Posts will publish respecting platform rate limits. "
+        + (f"{total_skipped} task(s) skipped (missing content or accounts)." if total_skipped else "")
+    )
+
+    await chat_push(
+        user_id=user_id,
+        content=summary,
+        agent_name="publisher",
+        goal_id=goal_id,
+    )
+
+    return {
+        "completed_task_ids": completed_ids,
+        "failed_task_ids": failed_ids,
+        "tasks": tasks,
+        "next_agent": "orchestrator",
+        "messages": [{"role": "assistant", "name": "publisher", "content": summary}],
+    }
 
 
 # ── Facebook Graph API Publisher ──────────────────────────────────────────────
