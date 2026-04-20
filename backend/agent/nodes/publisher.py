@@ -1,45 +1,47 @@
 """
 Digital Force — Publisher Agent Node
-Publishes content to social media platforms using per-account Truth Bucket credentials.
+=====================================
+Posts content to social media using the best available method per platform.
 
-FIXED (2.2):
-- Now queries PlatformConnection (Truth Bucket) table for enabled accounts per platform
-- Uses per-account auth_data credentials instead of global API keys
-- Posts to ALL enabled accounts matching the task's target platform (true multi-account fanout)
-- Uses ReAct loop: tries Ghost Browser JSON-RPC first → SkillForge auto-heal on failure
-- Emits media_urls if content result contains them (posts images/videos)
+STRATEGY:
+  Facebook  → Facebook Graph API (primary) → Ghost Browser (fallback)
+  All Other → Ghost Browser vision agent (LinkedIn, Instagram, TikTok,
+              Twitter, YouTube, WhatsApp, Pinterest — anything with a browser)
+
+The Ghost Browser approach requires NO API, NO OAuth approval, NO SDK.
+The agent literally browses to the platform, reads the screen with vision,
+finds the compose area, types the content, attaches media, and submits.
+It works on any platform a human can use.
+
+Truth Bucket provides per-account credentials (username/password or cookies)
+that the Ghost Browser uses to maintain authenticated sessions.
 """
 
 import json
 import logging
+from typing import List, Optional
 from agent.state import AgentState
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-from langchain_core.tools import tool
-from typing import List, Optional
 
-
-# ── Truth Bucket Account Fetcher ───────────────────────────────────────────────
+# ── Truth Bucket lookup ────────────────────────────────────────────────────────
 
 async def _get_accounts_for_platform(platform: str) -> list:
-    """
-    Query the PlatformConnection (Truth Bucket) table for all enabled accounts
-    on the requested platform. Returns a list of account dicts with credentials.
-    """
+    """Load all enabled accounts for a platform from the Truth Bucket."""
     try:
         from database import async_session, PlatformConnection
         from sqlalchemy import select
         async with async_session() as db:
-            result = await db.execute(
+            res = await db.execute(
                 select(PlatformConnection).where(
                     PlatformConnection.platform == platform.lower(),
                     PlatformConnection.is_enabled == True,
                 )
             )
-            accounts = result.scalars().all()
+            accounts = res.scalars().all()
             return [
                 {
                     "id": a.id,
@@ -47,143 +49,67 @@ async def _get_accounts_for_platform(platform: str) -> list:
                     "display_name": a.display_name,
                     "account_label": a.account_label,
                     "auth_data": a.auth_data or "",
+                    "web_username": a.web_username or "",
                     "connection_status": a.connection_status,
-                    "ghost_session_id": f"account_{a.id}",
                 }
                 for a in accounts
             ]
     except Exception as e:
-        logger.warning(f"[Publisher] Failed to load Truth Bucket accounts: {e}")
+        logger.warning(f"[Publisher] Truth Bucket lookup failed: {e}")
         return []
 
 
-# ── Publisher ReAct Tools ──────────────────────────────────────────────────────
-
-@tool
-async def post_via_ghost_browser(
-    account_id: str,
-    platform: str,
-    content: str,
-    media_urls: List[str] = None,
-    auth_data: str = "",
-) -> dict:
-    """
-    Use the Ghost Browser (Playwright persistent session) to post content to a social media account.
-    Navigates to the platform using stored auth credentials from the Truth Bucket.
-    If media_urls are provided, attaches images/videos to the post.
-    """
-    from agent.browser.ghost import ghost
-
-    if not ghost.is_running:
-        return {"success": False, "error": "Ghost Browser not running. Cannot post via browser."}
-
+async def _mark_account_needs_reauth(account_id: str):
+    """Flag an account in the Truth Bucket as needing re-authentication."""
     try:
-        page = await ghost.get_page(account_id=f"account_{account_id}")
-
-        post_urls = {
-            "facebook": "https://www.facebook.com",
-            "instagram": "https://www.instagram.com",
-            "linkedin": "https://www.linkedin.com/feed/",
-            "twitter": "https://twitter.com",
-            "tiktok": "https://www.tiktok.com/upload",
-        }
-        target_url = post_urls.get(platform.lower(), f"https://www.{platform.lower()}.com")
-
-        await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(3000)
-
-        # Check if we're logged in — look for the post compose area
-        # Composing: look for common post-box selectors
-        post_selectors = {
-            "facebook": '[data-pagelet="FeedUnit_0"], div[role="textbox"], [aria-label="Create a post"]',
-            "linkedin": 'button.share-box-feed-entry__trigger, [aria-label="Start a post"]',
-            "twitter": '[data-testid="tweetTextarea_0"], [aria-label="Tweet text"]',
-            "instagram": "button:has-text('New post')",
-        }
-        compose_selector = post_selectors.get(platform.lower(), 'div[role="textbox"]')
-
-        try:
-            compose_btn = await page.wait_for_selector(compose_selector, timeout=8000)
-            await compose_btn.click()
-            await page.wait_for_timeout(1000)
-            await page.keyboard.type(content, delay=30)
-
-            # Submit
-            submit_selectors = {
-                "facebook": 'button[aria-label="Post"]',
-                "linkedin": 'button.share-actions__primary-action',
-                "twitter": '[data-testid="tweetButtonInline"]',
-            }
-            submit_sel = submit_selectors.get(platform.lower(), 'button[type="submit"]')
-            try:
-                submit_btn = await page.wait_for_selector(submit_sel, timeout=5000)
-                await submit_btn.click()
-                await page.wait_for_timeout(3000)
-                await page.close()
-                return {"success": True, "method": "ghost_browser_ui", "platform": platform, "account_id": account_id}
-            except Exception as submit_err:
-                screenshot_path = f"debug_submit_{account_id}.png"
-                await page.screenshot(path=screenshot_path)
-                await page.close()
-                return {"success": False, "error": f"Submit failed: {submit_err}", "screenshot": screenshot_path, "human_needed": True}
-
-        except Exception as compose_err:
-            # Likely not logged in — signal that auth is needed
-            screenshot_path = f"debug_auth_{account_id}.png"
-            await page.screenshot(path=screenshot_path)
-            await page.close()
-            return {
-                "success": False,
-                "error": "Not logged in or compose area not found",
-                "screenshot": screenshot_path,
-                "human_needed": True,
-                "auth_required": True,
-                "account_id": account_id,
-                "platform": platform,
-            }
+        from database import async_session, PlatformConnection
+        async with async_session() as db:
+            account = await db.get(PlatformConnection, account_id)
+            if account:
+                account.connection_status = "needs_reauth"
+                await db.commit()
     except Exception as e:
-        logger.error(f"[Publisher Ghost] Unhandled error: {e}")
-        return {"success": False, "error": str(e)}
+        logger.warning(f"[Publisher] Could not update account status: {e}")
 
 
-@tool
-async def post_via_facebook_api(
+# ── Facebook Graph API Publisher ──────────────────────────────────────────────
+
+async def _post_facebook_api(
     page_id: str,
     access_token: str,
     content: str,
-    media_urls: List[str] = None,
+    media_urls: List[str],
 ) -> dict:
     """
-    Post to a Facebook Page using the Graph API. Requires a Page Access Token.
-    If media_urls are provided, uploads photos before creating the post.
+    Post to a Facebook Page using the Graph API.
+    Supports text-only posts and photo posts (links a hosted image URL).
     """
     import httpx
-
-    if not access_token or not page_id:
-        return {"success": False, "error": "Missing Facebook page_id or access_token"}
+    api_version = settings.facebook_api_version or "v21.0"
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             if media_urls:
-                # Post with photo
-                photo_url = f"https://graph.facebook.com/v19.0/{page_id}/photos"
-                resp = await client.post(photo_url, data={
-                    "url": media_urls[0],
-                    "message": content,
-                    "access_token": access_token,
-                    "published": "true",
-                })
+                # Photo post with caption
+                resp = await client.post(
+                    f"https://graph.facebook.com/{api_version}/{page_id}/photos",
+                    data={
+                        "url": media_urls[0],  # First image
+                        "message": content,
+                        "access_token": access_token,
+                        "published": "true",
+                    },
+                )
                 data = resp.json()
                 if "id" in data:
                     return {"success": True, "post_id": data["id"], "method": "facebook_graph_api_photo"}
                 return {"success": False, "error": data.get("error", {}).get("message", str(data))}
             else:
-                # Text-only post
-                feed_url = f"https://graph.facebook.com/v19.0/{page_id}/feed"
-                resp = await client.post(feed_url, data={
-                    "message": content,
-                    "access_token": access_token,
-                })
+                # Text post
+                resp = await client.post(
+                    f"https://graph.facebook.com/{api_version}/{page_id}/feed",
+                    data={"message": content, "access_token": access_token},
+                )
                 data = resp.json()
                 if "id" in data:
                     return {"success": True, "post_id": data["id"], "method": "facebook_graph_api"}
@@ -192,91 +118,197 @@ async def post_via_facebook_api(
             return {"success": False, "error": str(e)}
 
 
-@tool
-async def post_via_buffer_api(
-    profile_id: str,
-    access_token: str,
+# ── Universal Ghost Browser Publisher ─────────────────────────────────────────
+
+async def _post_via_ghost_browser(
+    account: dict,
+    platform: str,
     content: str,
-    media_urls: List[str] = None,
+    media_urls: List[str],
+    user_id: str,
+    goal_id: str,
 ) -> dict:
     """
-    Schedule a post via the Buffer API using a per-account Buffer profile_id and token.
-    Uses Buffer's text + media fields.
-    """
-    import httpx
-    if not access_token or not profile_id:
-        return {"success": False, "error": "Missing Buffer profile_id or access_token"}
+    Universal vision-driven Ghost Browser publisher.
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        try:
-            payload = {
-                "text": content,
-                "profile_ids[]": profile_id,
-                "now": "true",
-            }
-            if media_urls:
-                for i, url in enumerate(media_urls[:4]):
-                    payload[f"media[photo]"] = url
-            resp = await client.post(
-                "https://api.bufferapp.com/1/updates/create.json",
-                data=payload,
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            data = resp.json()
-            if data.get("success"):
-                return {"success": True, "update_id": data.get("updates", [{}])[0].get("id"), "method": "buffer_api"}
-            return {"success": False, "error": data.get("message", str(data))}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    The agent:
+    1. Navigates to the platform homepage
+    2. Uses vision (ghost_see) to check login state
+    3. If not logged in, attempts login using Truth Bucket credentials
+    4. Finds the compose / create post area using vision
+    5. Types the content naturally (human-speed keystrokes)
+    6. Uploads any media files if available
+    7. Submits and confirms via vision
 
+    Works for: LinkedIn, Instagram, Twitter/X, TikTok, Pinterest, YouTube
+    community posts, Reddit, Facebook (fallback), and any future platform.
+    """
+    from agent.llm import get_tool_llm
+    from agent.chat_push import chat_push, agent_thought_push
+    from agent.browser.react_browser import (
+        ghost_goto, ghost_see, ghost_click, ghost_type,
+        ghost_press_key, ghost_upload_file, ghost_wait_for,
+        ghost_scroll, ghost_get_page_text,
+    )
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.messages import SystemMessage, HumanMessage
 
-@tool
-async def request_human_intervention(reason: str, account_id: str, platform: str) -> dict:
-    """
-    When the publisher cannot post due to auth failure, QR code requirement, or CAPTCHA,
-    call this tool to pause and signal that the human operator needs to act.
-    The Truth Bucket entry will be flagged as needing re-authentication.
-    """
+    account_id = account["id"]
+    auth_data_raw = account.get("auth_data", "")
+    web_username = account.get("web_username", "")
+
+    # Parse auth_data — may be JSON or free-form key: value
+    auth_info = {}
     try:
-        from database import async_session, PlatformConnection
-        from sqlalchemy import select
-        async with async_session() as db:
-            result = await db.execute(
-                select(PlatformConnection).where(PlatformConnection.id == account_id)
-            )
-            account = result.scalar_one_or_none()
-            if account:
-                account.connection_status = "needs_reauth"
-                await db.commit()
+        auth_info = json.loads(auth_data_raw)
+    except Exception:
+        for line in auth_data_raw.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                auth_info[k.strip().lower().replace(" ", "_")] = v.strip()
+
+    # Download media to local temp files so we can upload them
+    local_media_paths = []
+    if media_urls:
+        import httpx, tempfile, os
+        for url in media_urls[:4]:  # Limit to 4 media items
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r = await client.get(url)
+                    ext = url.split(".")[-1].split("?")[0][:4] or "jpg"
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+                    tmp.write(r.content)
+                    tmp.close()
+                    local_media_paths.append(tmp.name)
+            except Exception as e:
+                logger.warning(f"[Publisher] Could not download media {url}: {e}")
+
+    # Build system prompt for the Ghost Browser ReAct agent
+    platform_hint = {
+        "linkedin":  "https://linkedin.com/feed/",
+        "instagram": "https://www.instagram.com/",
+        "twitter":   "https://twitter.com/home",
+        "tiktok":    "https://www.tiktok.com/upload",
+        "pinterest": "https://www.pinterest.com/",
+        "facebook":  "https://www.facebook.com/",
+        "youtube":   "https://studio.youtube.com/",
+    }.get(platform.lower(), f"https://www.{platform.lower()}.com/")
+
+    media_instruction = (
+        f"After typing the content, upload these local files: {local_media_paths}"
+        if local_media_paths
+        else "This is a text-only post, no media to upload."
+    )
+
+    sys_prompt = f"""You are a Ghost Browser operator for Digital Force. You control a real Chromium browser remotely.
+Your mission: Post content to {platform.upper()} for the account '{account['display_name']}'.
+
+ACCOUNT CREDENTIALS (from Truth Bucket):
+{json.dumps(auth_info, indent=2)}
+Username/Email: {web_username or auth_info.get('email', auth_info.get('username', 'not set'))}
+
+CONTENT TO POST:
+{content}
+
+MEDIA: {media_instruction}
+
+OPERATING PROCEDURE — follow this sequence:
+1. Call ghost_goto to navigate to {platform_hint} (account_id='{account_id}')
+2. Call ghost_see to check: "Am I logged into {platform}? Is there a post compose area visible?"
+3. IF NOT LOGGED IN:
+   - Navigate to the login page
+   - Click the email/username field, use ghost_type to enter the username
+   - Click the password field, use ghost_type to enter the password
+   - Click login/sign-in button
+   - Wait for the feed/home page to load
+   - Call ghost_see to confirm login succeeded
+4. FIND THE COMPOSE / CREATE POST AREA:
+   - Look for: "Start a post", "What's on your mind?", "Create", "+ New", "Compose"
+   - Call ghost_click to open it
+5. TYPE THE CONTENT:
+   - Call ghost_click on the text area to focus it
+   - Call ghost_type with the full post content
+6. IF MEDIA: Call ghost_upload_file for each local media path
+7. SUBMIT:
+   - Find the "Post", "Share", "Tweet", "Publish" button
+   - Call ghost_click to submit
+8. CONFIRM:
+   - Call ghost_wait_for "confirmation that post was published successfully, or any error message"
+   - Report what you saw
+
+RULES:
+- Always pass account_id='{account_id}' to every tool call
+- If you hit a CAPTCHA or phone verification, call ghost_see to take a screenshot and report it
+- Never skip steps — always verify with ghost_see before clicking
+- Do not use markdown asterisks in your final report
+"""
+
+    tools = [
+        ghost_goto, ghost_see, ghost_click, ghost_type,
+        ghost_press_key, ghost_upload_file, ghost_wait_for,
+        ghost_scroll, ghost_get_page_text,
+    ]
+
+    llm = get_tool_llm(temperature=0.1)
+    agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
+
+    try:
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=f"Post to {platform} for account {account['display_name']} now.")]},
+            {"recursion_limit": 20},  # Give the agent room to navigate + login + post
+        )
+        messages = result.get("messages", [])
+        output = ""
+        for msg in reversed(messages):
+            if msg.type == "ai" and msg.content:
+                output = msg.content
+                break
+
+        # Clean up temp files
+        for path in local_media_paths:
+            try:
+                import os
+                os.unlink(path)
+            except Exception:
+                pass
+
+        # Determine success from final output
+        success_keywords = ["success", "posted", "published", "shared", "submitted", "live"]
+        failure_keywords = ["captcha", "verification", "phone", "error", "failed", "blocked", "login"]
+
+        output_lower = output.lower()
+        if any(k in output_lower for k in success_keywords) and not any(k in output_lower for k in failure_keywords):
+            return {"success": True, "method": "ghost_browser_vision", "output": output}
+        elif "captcha" in output_lower or "verification" in output_lower or "phone" in output_lower:
+            return {"success": False, "error": "Human verification required", "human_needed": True, "output": output}
+        else:
+            return {"success": False, "error": output[:200], "output": output}
+
     except Exception as e:
-        logger.warning(f"[Publisher] Could not update connection_status: {e}")
+        logger.error(f"[Publisher Ghost] ReAct loop error: {e}", exc_info=True)
+        # Clean up temp files on error too
+        for path in local_media_paths:
+            try:
+                import os
+                os.unlink(path)
+            except Exception:
+                pass
+        return {"success": False, "error": str(e)}
 
-    return {
-        "command": "PAUSE_AND_NOTIFY",
-        "reason": reason,
-        "account_id": account_id,
-        "platform": platform,
-        "message": f"Authentication required for {platform} account {account_id}. Please go to Settings > Integrations and use Auto Verify or QR scan.",
-    }
 
-
-# ── Publisher Node (Main Entry Point) ─────────────────────────────────────────
+# ── Main Publisher Node ────────────────────────────────────────────────────────
 
 async def publisher_node(state: AgentState) -> dict:
     """
-    Multi-account Publisher with ReAct loop.
-    
+    Multi-account, multi-platform publisher.
+
     For each pending post_content task:
-    1. Queries Truth Bucket for all enabled accounts on the task's platform
-    2. Tries Facebook Graph API (if token available in auth_data)
-    3. Falls back to Ghost Browser UI automation
-    4. Falls back to Buffer API
-    5. If all fail, requests human intervention and marks account for re-auth
+      1. Look up all enabled accounts for the task's platform in the Truth Bucket
+      2. For Facebook: try Graph API, fall back to Ghost Browser on failure
+      3. For everything else: Ghost Browser vision agent directly
+      4. Push live status updates to chat as each account is posted to
     """
     from agent.chat_push import chat_push, agent_thought_push
-    from agent.llm import get_tool_llm
-    from langgraph.prebuilt import create_react_agent
-    from langchain_core.messages import SystemMessage, HumanMessage
 
     goal_id = state.get("goal_id", "")
     user_id = state.get("created_by", "")
@@ -284,6 +316,7 @@ async def publisher_node(state: AgentState) -> dict:
     completed_ids = list(state.get("completed_task_ids", []))
     failed_ids = list(state.get("failed_task_ids", []))
 
+    # Find all tasks that have content ready to publish
     post_tasks = [
         t for t in tasks
         if t.get("task_type") == "post_content"
@@ -292,19 +325,18 @@ async def publisher_node(state: AgentState) -> dict:
     ]
 
     if not post_tasks:
-        logger.info("[Publisher] No post_content tasks pending.")
         return {
             "completed_task_ids": completed_ids,
             "failed_task_ids": failed_ids,
             "tasks": tasks,
             "next_agent": "orchestrator",
-            "messages": [{"role": "assistant", "name": "publisher", "content": "No content ready for publishing yet."}],
+            "messages": [{"role": "assistant", "name": "publisher", "content": "No publishable content tasks pending."}],
         }
 
     await agent_thought_push(
         user_id=user_id,
         agent_name="publisher",
-        context=f"Activating multi-account publication ReAct loop for {len(post_tasks)} content piece(s)",
+        context=f"Activating publishing loop for {len(post_tasks)} content piece(s) across all Truth Bucket accounts",
         goal_id=goal_id,
     )
 
@@ -313,156 +345,141 @@ async def publisher_node(state: AgentState) -> dict:
         content_result = task.get("result", {})
 
         if not content_result:
-            logger.warning(f"[Publisher] Task {task.get('id')} has no content result. Skipping.")
             failed_ids.append(task.get("id"))
-            task["error"] = "No content result available"
+            task["error"] = "No content result — ContentDirector did not produce output"
             continue
 
-        # Build the full post text
+        # Build the full post text from content director output
         hook = content_result.get("hook", "")
         body = content_result.get("body", "")
         cta = content_result.get("call_to_action", "")
         hashtags = " ".join(content_result.get("hashtags", []))
-        post_text = f"{hook}\n\n{body}\n\n{cta}\n\n{hashtags}".strip()
-        media_urls = content_result.get("media_urls", [])
+        post_text = "\n\n".join(filter(None, [hook, body, cta, hashtags])).strip()
+        media_urls: List[str] = content_result.get("media_urls", [])
 
         await chat_push(
             user_id=user_id,
-            content=f"Publishing to {platform.upper()}: {hook[:60]}... ({len(media_urls)} media attached)",
+            content=f"Publishing to {platform.upper()}: \"{hook[:70]}...\" ({len(media_urls)} media file(s))",
             agent_name="publisher",
             goal_id=goal_id,
         )
 
-        # ── Get all Truth Bucket accounts for this platform ─────────────────
+        # Load all matching accounts from Truth Bucket
         accounts = await _get_accounts_for_platform(platform)
+
         if not accounts:
             await chat_push(
                 user_id=user_id,
-                content=f"No enabled {platform.upper()} accounts found in Truth Bucket. Please add accounts in Settings > Integrations.",
+                content=f"No enabled {platform.upper()} accounts found in Truth Bucket. Add accounts in Settings > Integrations.",
                 agent_name="publisher",
                 goal_id=goal_id,
             )
             failed_ids.append(task.get("id"))
-            task["error"] = f"No {platform} accounts in Truth Bucket"
+            task["error"] = f"No {platform} accounts configured"
             continue
 
         await chat_push(
             user_id=user_id,
-            content=f"Found {len(accounts)} {platform.upper()} account(s) in Truth Bucket. Publishing to all...",
+            content=f"Found {len(accounts)} {platform.upper()} account(s). Publishing to all now...",
             agent_name="publisher",
             goal_id=goal_id,
         )
 
-        # ── ReAct loop per account ─────────────────────────────────────────
-        llm = get_tool_llm(temperature=0.1)
-        tools = [
-            post_via_facebook_api,
-            post_via_buffer_api,
-            post_via_ghost_browser,
-            request_human_intervention,
-        ]
+        task_success = True
 
-        all_success = True
         for account in accounts:
             auth_data_raw = account.get("auth_data", "")
-
-            # Parse auth_data as JSON or raw text
             auth_info = {}
             try:
                 auth_info = json.loads(auth_data_raw)
             except Exception:
-                # Free-form text — extract what we can with simple heuristics
                 for line in auth_data_raw.splitlines():
                     if ":" in line:
                         k, v = line.split(":", 1)
                         auth_info[k.strip().lower().replace(" ", "_")] = v.strip()
 
-            sys_prompt = f"""You are the Publisher agent for Digital Force. Your ONLY job is to successfully post content to the target social media account.
+            post_result = None
 
-ACCOUNT INFO:
-  Platform: {platform}
-  Display Name: {account['display_name']}
-  Label: {account['account_label']}
-  Account ID: {account['id']}
-  Auth Data: {json.dumps(auth_info, indent=2)}
+            # ── FACEBOOK: Graph API first, Ghost Browser fallback ──────────────
+            if platform == "facebook":
+                page_id = auth_info.get("page_id") or settings.facebook_page_id
+                access_token = auth_info.get("access_token") or settings.facebook_access_token
 
-CONTENT TO POST:
-  Text: {post_text}
-  Media URLs: {json.dumps(media_urls)}
+                if page_id and access_token:
+                    await agent_thought_push(
+                        user_id=user_id,
+                        agent_name="publisher",
+                        context=f"Attempting Facebook Graph API for {account['display_name']}",
+                        goal_id=goal_id,
+                    )
+                    post_result = await _post_facebook_api(page_id, access_token, post_text, media_urls)
 
-PUBLISHING STRATEGY (try in this order):
-1. If platform is "facebook" and auth_data contains "access_token" and "page_id", call `post_via_facebook_api` immediately.
-2. If platform is supported by Buffer and auth_data contains "buffer_token" or "profile_id", call `post_via_buffer_api`.
-3. If the above fail or credentials are missing, call `post_via_ghost_browser` using the Ghost Browser session.
-4. If ghost browser returns auth_required=True or human_needed=True, call `request_human_intervention` to pause and notify the user.
+                    if post_result.get("success"):
+                        await chat_push(
+                            user_id=user_id,
+                            content=f"Posted to Facebook page '{account['display_name']}' via Graph API. Post ID: {post_result.get('post_id')}",
+                            agent_name="publisher",
+                            goal_id=goal_id,
+                        )
+                        continue  # Move to next account
 
-RULES:
-- Do not guess credentials. Only use what is in Auth Data.
-- Always pass media_urls to the posting function if they are provided.
-- After one successful post, stop and report success.
-- After a failure, move to the next strategy immediately.
-- Your final output must be a plain text status sentence.
-"""
+                    # API failed — fall through to Ghost Browser
+                    logger.warning(f"[Publisher] Facebook API failed for {account['display_name']}: {post_result.get('error')}. Falling back to Ghost Browser.")
+                    await agent_thought_push(
+                        user_id=user_id,
+                        agent_name="publisher",
+                        context=f"Facebook Graph API failed ({post_result.get('error', 'unknown')}). Switching to Ghost Browser physical posting.",
+                        goal_id=goal_id,
+                    )
 
-            agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
-            prompt = f"Post the content to {platform} for account '{account['display_name']}' now."
+            # ── ALL PLATFORMS (including FB fallback): Ghost Browser vision agent
+            await agent_thought_push(
+                user_id=user_id,
+                agent_name="publisher",
+                context=f"Ghost Browser agent opening {platform} for account '{account['display_name']}' — navigating and posting physically",
+                goal_id=goal_id,
+            )
 
-            try:
-                result_state = await agent.ainvoke(
-                    {"messages": [HumanMessage(content=prompt)]},
-                    {"recursion_limit": 6}
+            post_result = await _post_via_ghost_browser(
+                account=account,
+                platform=platform,
+                content=post_text,
+                media_urls=media_urls,
+                user_id=user_id,
+                goal_id=goal_id,
+            )
+
+            if post_result.get("success"):
+                await chat_push(
+                    user_id=user_id,
+                    content=f"Posted to {platform.upper()} / {account['display_name']} via Ghost Browser.",
+                    agent_name="publisher",
+                    goal_id=goal_id,
                 )
-                messages = result_state.get("messages", [])
-                output = ""
-                for msg in reversed(messages):
-                    if msg.type == "ai" and msg.content:
-                        output = msg.content
-                        break
+            elif post_result.get("human_needed"):
+                await chat_push(
+                    user_id=user_id,
+                    content=f"Account '{account['display_name']}' ({platform}) hit a verification wall (CAPTCHA or phone check). Please log in manually via Settings > Integrations, then re-run the campaign.",
+                    agent_name="publisher",
+                    goal_id=goal_id,
+                )
+                await _mark_account_needs_reauth(account["id"])
+                task_success = False
+            else:
+                await chat_push(
+                    user_id=user_id,
+                    content=f"Ghost Browser could not post to {account['display_name']} ({platform}). Reason: {post_result.get('error', 'Unknown')}",
+                    agent_name="publisher",
+                    goal_id=goal_id,
+                )
+                task_success = False
 
-                # Check tool results for success/failure
-                posted = False
-                needs_human = False
-                for msg in messages:
-                    if hasattr(msg, "content") and isinstance(msg.content, str):
-                        try:
-                            r = json.loads(msg.content)
-                            if r.get("success"):
-                                posted = True
-                                break
-                            if r.get("human_needed") or r.get("auth_required") or r.get("command") == "PAUSE_AND_NOTIFY":
-                                needs_human = True
-                        except Exception:
-                            pass
-
-                if posted:
-                    await chat_push(
-                        user_id=user_id,
-                        content=f"Posted successfully to {platform.upper()} / {account['display_name']}.",
-                        agent_name="publisher",
-                        goal_id=goal_id,
-                    )
-                elif needs_human:
-                    await chat_push(
-                        user_id=user_id,
-                        content=f"Account {account['display_name']} ({platform}) needs re-authentication. Please scan QR or verify in Settings > Integrations.",
-                        agent_name="publisher",
-                        goal_id=goal_id,
-                    )
-                    all_success = False
-                else:
-                    logger.warning(f"[Publisher] ReAct did not confirm success for {account['display_name']}. Output: {output[:200]}")
-                    all_success = False
-
-            except Exception as e:
-                logger.error(f"[Publisher] ReAct loop failed for account {account['id']}: {e}")
-                all_success = False
-
-        if all_success:
+        # Mark task based on overall account success
+        if task_success:
             completed_ids.append(task.get("id"))
             task["status"] = "completed"
         else:
-            # Partial success — still mark completed if at least one account worked
-            # Deep judgement: the task is "done" even if one account needed human help
+            # Partial — at least we attempted. Mark completed so the loop moves forward.
             completed_ids.append(task.get("id"))
             task["status"] = "completed_partial"
 
@@ -474,6 +491,6 @@ RULES:
         "messages": [{
             "role": "assistant",
             "name": "publisher",
-            "content": f"Publisher finished. {len(completed_ids)} tasks processed across all Truth Bucket accounts."
+            "content": f"Publisher finished. Processed {len(post_tasks)} task(s) across all Truth Bucket accounts.",
         }],
     }
