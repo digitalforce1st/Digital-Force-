@@ -55,76 +55,79 @@ def _safe_startup_task(coro) -> asyncio.Task:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events."""
+    """
+    Startup and shutdown events.
+
+    SPEED FIX: The server starts accepting requests in < 2 seconds.
+    Heavy components (Ghost Browser, Qdrant, Scheduler, Monologue)
+    initialize in the background AFTER yield so Ngrok never sees a
+    connection timeout during hot-restart.
+    """
     logger.info("🚀 Digital Force starting up...")
+
+    # ── FAST PATH: only blocking calls that MUST happen before requests ──────
     await init_db()
     logger.info("✅ Database initialized")
 
-    # Ensure Qdrant collections exist
-    try:
-        from rag.retriever import ensure_collections
-        await ensure_collections()
-        logger.info("✅ Qdrant collections ready")
-    except Exception as e:
-        logger.warning(f"⚠️  Qdrant not available: {e}")
-
-    # Ensure media directories exist
     Path(settings.media_upload_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.media_processed_dir).mkdir(parents=True, exist_ok=True)
-    logger.info("✅ Media directories ready")
 
-    logger.info(f"🧠 LLM cascade: Groq Keys: {[bool(settings.groq_api_key_1), bool(settings.groq_api_key_2), bool(settings.groq_api_key_3)]}")
-    logger.info(f"📡 Publishing: Buffer={bool(settings.buffer_access_token)} | Facebook={bool(settings.facebook_access_token)}")
+    active_keys = len(settings.all_groq_keys)
+    logger.info(f"🧠 LLM: {active_keys} Groq key(s) configured — {active_keys * 100_000:,} tokens/day capacity")
 
-    # 👻 Start the Ghost Browser (Persistent Session Playwright)
-    # Wrapped in try/except — Playwright absence must NOT crash the entire server.
+    # ── BACKGROUND: Heavy non-blocking initialization ────────────────────────
+    # Fire as a background task BEFORE yield so it starts immediately
+    async def _background_init():
+        await asyncio.sleep(2)  # Let first HTTP requests through cleanly
+
+        try:
+            from rag.retriever import ensure_collections
+            await ensure_collections()
+            logger.info("✅ Qdrant collections ready")
+        except Exception as e:
+            logger.warning(f"⚠️  Qdrant not available: {e}")
+
+        try:
+            from agent.browser.ghost import ghost
+            await ghost.start()
+            logger.info("✅ Ghost Browser initialized")
+        except Exception as e:
+            logger.warning(f"⚠️  Ghost Browser unavailable ({e})")
+
+        try:
+            from scheduler import scheduler
+            await scheduler.start()
+            logger.info("📅 Post Scheduler started")
+        except Exception as e:
+            logger.warning(f"⚠️  Post Scheduler failed ({e})")
+
+        try:
+            from langclaw_agents.monologue_worker import internal_monologue
+            _safe_startup_task(internal_monologue())
+            logger.info("🧠 Monologue Worker running — swarm is alive")
+        except Exception as e:
+            logger.warning(f"⚠️  Monologue Worker failed ({e})")
+
+        try:
+            from agent.tools.email_inbox import poll_email_inbox
+            _safe_startup_task(poll_email_inbox())
+            logger.info("📧 Email Inbox Poller running")
+        except Exception as e:
+            logger.warning(f"⚠️  Email Inbox Poller failed ({e})")
+
+        logger.info("🎯 All systems initialized — Digital Force fully operational")
+
+    _safe_startup_task(_background_init())
+
+    yield  # ← ONE yield. Server ready. Background init running concurrently.
+
+    # ── SHUTDOWN ──────────────────────────────────────────────────────────────
+    logger.info("👋 Digital Force shutting down...")
     try:
         from agent.browser.ghost import ghost
-        await ghost.start()
-        logger.info("✅ Ghost Browser initialized — Playwright sessions ready")
-    except Exception as e:
-        logger.warning(
-            f"⚠️  Ghost Browser unavailable ({e}). "
-            "Walled-garden research will fall back to web search. Non-fatal."
-        )
-
-    # 📅 Start the Post Scheduler — queue-based async publisher with rate limiting
-    try:
-        from scheduler import scheduler
-        await scheduler.start()
-        logger.info("📅 Post Scheduler started — rate-limited parallel publishing active")
-    except Exception as e:
-        logger.warning(f"⚠️  Post Scheduler failed to start ({e}). Non-fatal.")
-
-    # 🧠 Start the Internal Monologue Worker — replaces agency_daemon.py
-    # Non-blocking. Paginated. Randomized sleep. The agent is now truly alive.
-    # GC-SAFE: pinned in _STARTUP_TASKS until the task completes (it never does — infinite loop).
-    from langclaw_agents.monologue_worker import internal_monologue
-    _safe_startup_task(internal_monologue())
-    logger.info("🧠 Internal Monologue Worker started — Digital Force 2.0 is alive")
-
-    # 📧 Start the Inbox Poller — listening for user email replies
-    # GC-SAFE: same pattern as monologue worker.
-    try:
-        from agent.tools.email_inbox import poll_email_inbox
-        _safe_startup_task(poll_email_inbox())
-        logger.info("📧 IMAP Inbox Poller scheduled")
-    except Exception as e:
-        logger.warning(f"⚠️  Email Inbox Poller failed to start ({e}). Non-fatal.")
-
-    logger.info("✨ Digital Force is ready.")
-
-    yield
-
-    logger.info("👋 Digital Force shutting down...")
-    
-    # Clean up browser persistence
-    try:
         await ghost.stop()
     except Exception:
         pass
-
-    # Stop the scheduler gracefully
     try:
         from scheduler import scheduler
         await scheduler.stop()
