@@ -106,16 +106,25 @@ async def researcher_node(state: AgentState) -> dict:
 
     await agent_thought_push(
         user_id=user_id,
-        context="initiating intelligence gathering sequence across network nodes",
         agent_name="researcher",
+        context="initiating intelligence gathering sequence across network nodes",
         goal_id=goal_id,
     )
 
     WALLED_GARDENS = {"instagram", "facebook", "linkedin", "tiktok"}
     requires_vision = any(p in WALLED_GARDENS for p in platforms)
 
+    # Whether Ghost Browser is available — determined at runtime so a missing
+    # Playwright install degrades gracefully to the Tavily web search path.
+    ghost_available = False
     try:
-        if requires_vision:
+        from agent.browser.ghost import ghost
+        ghost_available = ghost.is_running
+    except Exception:
+        pass
+
+    try:
+        if requires_vision and ghost_available:
             target_platform = next(p for p in platforms if p in WALLED_GARDENS)
             await chat_push(
                 user_id=user_id,
@@ -123,23 +132,41 @@ async def researcher_node(state: AgentState) -> dict:
                 agent_name="researcher",
                 goal_id=goal_id,
             )
-            findings = await ghost_visual_research(goal, target_platform)
+            try:
+                findings = await ghost_visual_research(goal, target_platform)
+                if not findings or not findings.get("trending_topics"):
+                    raise ValueError("Ghost returned empty findings — falling back to web search")
+            except Exception as ghost_err:
+                logger.warning(f"[Researcher] Ghost Browser path failed ({ghost_err}) — falling back to Tavily")
+                findings = {}  # Will trigger the web search fallback below
             topics = findings.get('trending_topics', [])
             angles = findings.get('content_angles', [])
-            
+
         else:
+            if requires_vision and not ghost_available:
+                logger.info("[Researcher] Ghost Browser unavailable — using Tavily web search for walled garden research")
             await chat_push(
                 user_id=user_id,
                 content=f"💻 Launching neural web-crawl across Tavily nodes to fetch live open-web intel...",
                 agent_name="researcher",
                 goal_id=goal_id,
             )
-            
+            findings = {}
+            topics = []
+            angles = []
+
+        # ── Web search path (always runs if Ghost failed or not needed) ──────
+        if not topics:
             result = await search_social_trends(goal, platforms)
             output = str(result.get("results", []))
-                
-            await agent_thought_push(user_id, "researcher", f"crawl complete, parsing text nodes with LLM", goal_id)
-            
+
+            await agent_thought_push(
+                user_id=user_id,
+                agent_name="researcher",
+                context="crawl complete, parsing text nodes with LLM",
+                goal_id=goal_id,
+            )
+
             synthesis_prompt = f"""
 Based on the raw data scraped by our headless framework, extract actionable social media insights:
 GOAL: {goal}
@@ -168,8 +195,8 @@ Return JSON:
 
         await agent_thought_push(
             user_id=user_id,
-            context=f"successfully extracted {len(topics)} trends and {len(angles)} unique angles from the raw data",
             agent_name="researcher",
+            context=f"successfully extracted {len(topics)} trends and {len(angles)} unique angles from the raw data",
             goal_id=goal_id,
         )
         return {

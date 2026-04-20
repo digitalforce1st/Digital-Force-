@@ -134,5 +134,5 @@ Write compelling, {platform}-native content that drives real engagement.
         logger.error(f"[ContentDirector] Error: {e}")
         return {
             "error": str(e),
-            "next_agent": "manager",
+            "next_agent": "orchestrator",  # Fixed: 'manager' doesn't exist in DF 2.0 Langclaw arch
         }

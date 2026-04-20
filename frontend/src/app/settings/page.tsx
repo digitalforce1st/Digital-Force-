@@ -869,14 +869,14 @@ export default function SettingsPage() {
               </div>
 
               {/* QR Code display */}
-              {!waStatus.authenticated && waStatus.qr_image_b64 && (
+              {!waStatus.authenticated && waStatus.qr_available && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1.5rem', background: 'rgba(255,255,255,0.03)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)' }}>
                   <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.5)', textAlign: 'center' }}>
                     Open <strong style={{ color: '#fff' }}>WhatsApp</strong> on your phone → Three Dots → Linked Devices → Link a Device → scan below
                   </div>
                   <div style={{ padding: 12, background: '#fff', borderRadius: 12 }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`data:image/png;base64,${waStatus.qr_image_b64}`} alt="WhatsApp QR Code" style={{ width: 220, height: 220, display: 'block' }} />
+                    <img src={`${BASE}/qr/whatsapp_qr.png?_t=${Date.now()}`} alt="WhatsApp QR Code" style={{ width: 220, height: 220, display: 'block' }} />
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <RefreshCw size={11} />
@@ -885,7 +885,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {!waStatus.authenticated && !waStatus.qr_image_b64 && (
+              {!waStatus.authenticated && !waStatus.qr_available && (
                 <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.35)', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <QrCode size={16} color="rgba(255,255,255,0.2)" />
                   Click <strong style={{ color: '#25D166' }}>Connect WhatsApp</strong> to generate a QR code and link your phone.

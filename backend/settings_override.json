@@ -12,5 +12,6 @@
   "agent_timeout_seconds": "1200",
   "smtp_password": "brqw qept enyn lhsw",
   "target_notification_emails": "kashiribrighton@aiinstituteafrica.com",
-  "proxy_provider_api": ""
+  "proxy_provider_api": "",
+  "admin_whatsapp_number": "+263773370325"
 }

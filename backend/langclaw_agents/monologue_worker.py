@@ -14,7 +14,7 @@ KEY DIFFERENCES from the old daemon:
   - NEW: Runs as a standalone asyncio.Task, completely isolated from the HTTP thread.
 
   - OLD: Always pushed research briefs every 2 hours regardless of relevance.
-  - NEW: Builds a "queue of thoughts" in Postgres. Only pushes to the user's
+  - NEW: Builds a "queue of thoughts" in Qdrant. Only pushes to the user's
     Chat Hub when a thought exceeds the RELEVANCE_THRESHOLD.
 
 Architecture:
@@ -25,12 +25,35 @@ The Relevance Threshold:
   Every background research output is scored 0-100 by the LLM.
   Only scores >= RELEVANCE_THRESHOLD (default: 75) trigger a chat push.
   Lower scores are silently logged for future Qdrant episodic memory.
+
+Fixes applied (v2):
+  FIX 1 — GC-safe tasks: _safe_create_task() holds a strong set reference so
+           asyncio cannot silently garbage-collect mid-flight fire-and-forget
+           coroutines (e.g. _retry_planning).
+
+  FIX 2 — Real web research: _fetch_industry_news() pulls a live Google News
+           RSS feed before the LLM prompt so research briefs are grounded in
+           real current events, not hallucinations.
+
+  FIX 3 — Timezone safety: _to_naive_utc() strips tz-awareness from any
+           datetime returned by the DB before arithmetic. Prevents the
+           TypeError that silently killed per-user autonomous cycles.
+
+  FIX 4 — DB-backed nudge throttle: _nudge_approval() now reads the
+           ChatMessage table to check whether an orchestrator nudge was sent
+           in the last hour. Survives server restarts unlike the old
+           function-attribute in-memory cache.
+
+  FIX 5 — Correct RAG API: _store_silent_thought() calls
+           rag.retriever.store() directly. The fictional ingest_text() that
+           was referenced no longer crashes silently.
 """
 
 import asyncio
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +64,38 @@ RELEVANCE_THRESHOLD = 75    # Score (0-100) above which we interrupt the user
 PROACTIVE_HOURS     = 2     # Hours between proactive research per user
 IDLE_THRESHOLD_HRS  = 24    # Hours of inactivity before idle report is sent
 PAGE_SIZE           = 10    # Max users processed per cycle to prevent OOM
+
+# ── FIX 1: Module-level task registry — prevents silent GC of fire-and-forget ─
+# Python docs warn: "A task can be garbage collected mid-flight if no strong
+# reference is held." We keep strong references here and discard on completion.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _safe_create_task(coro) -> asyncio.Task:
+    """
+    Create an asyncio task that is pinned in _BACKGROUND_TASKS so the event
+    loop cannot garbage-collect it before it finishes executing.
+    The set entry is automatically cleaned up via add_done_callback.
+    """
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+# ── FIX 3: Timezone-safe datetime normalizer ───────────────────────────────────
+
+def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Normalize any datetime to naive UTC so arithmetic never raises TypeError.
+    SQLite returns naive datetimes; Postgres/future backends may return
+    tz-aware ones. Both are handled identically after this call.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -77,6 +132,7 @@ async def _run_monologue_cycle():
     from sqlalchemy import select
 
     logger.info("[Monologue] ── Starting thought cycle ──")
+    # Naive UTC is used consistently throughout a cycle (FIX 3)
     now = datetime.utcnow()
 
     # ── Phase 1: Process active goals for ALL users (paginated) ───────────────
@@ -132,17 +188,23 @@ async def _phase_execute_goals(now: datetime):
     for goal in goals:
         try:
             if goal.status == "planning":
-                age = (now - goal.created_at).total_seconds()
+                # FIX 3: normalize before subtraction
+                created_at = _to_naive_utc(goal.created_at) or now
+                age = (now - created_at).total_seconds()
                 if age > 600 and not goal.plan:
                     logger.info(f"[Monologue] Goal {goal.id[:8]} stuck in planning >10min — retrying")
                     await _retry_planning(goal)
 
             elif goal.status == "awaiting_approval":
-                if goal.updated_at and (now - goal.updated_at).total_seconds() > 3600:
+                # FIX 3: normalize before subtraction
+                updated_at = _to_naive_utc(goal.updated_at)
+                if updated_at and (now - updated_at).total_seconds() > 3600:
                     await _nudge_approval(goal, now)
 
             elif goal.status == "executing":
-                if goal.updated_at and (now - goal.updated_at).total_seconds() > 900:
+                # FIX 3: normalize before subtraction
+                updated_at = _to_naive_utc(goal.updated_at)
+                if updated_at and (now - updated_at).total_seconds() > 900:
                     await _push_execution_status(goal)
 
         except Exception as e:
@@ -150,21 +212,45 @@ async def _phase_execute_goals(now: datetime):
 
 
 async def _retry_planning(goal):
-    """Re-trigger Langclaw orchestration for a stuck goal."""
+    """
+    Re-trigger Langclaw orchestration for a stuck goal.
+    FIX 1: Uses _safe_create_task() so the coroutine cannot be silently
+    garbage-collected before run_orchestration() completes.
+    """
     from langclaw_agents.orchestrator_app import run_orchestration
-    asyncio.create_task(run_orchestration(goal.id, trigger_source="monologue_retry"))
+    _safe_create_task(run_orchestration(goal.id, trigger_source="monologue_retry"))
 
 
 async def _nudge_approval(goal, now: datetime):
-    """Remind user that a plan is waiting for their approval. Throttled to once/hour."""
-    from agent.chat_push import chat_push
+    """
+    Remind user that a plan is waiting for their approval.
 
-    if not hasattr(_nudge_approval, "_cache"):
-        _nudge_approval._cache = {}
-    last = _nudge_approval._cache.get(goal.id)
-    if last and (now - last).total_seconds() < 3600:
+    FIX 4: Throttle is now DB-backed and survives server restarts.
+    Previously this used a function-attribute dict (_nudge_approval._cache)
+    that was reset to empty on every server restart/deploy, causing users to
+    be re-spammed after each deployment. Now we query the ChatMessage table
+    directly — if an orchestrator nudge was already sent for this goal in the
+    last hour, we skip silently.
+    """
+    from agent.chat_push import chat_push
+    from database import async_session, ChatMessage
+    from sqlalchemy import select
+
+    one_hour_ago = now - timedelta(hours=1)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ChatMessage).where(
+                ChatMessage.goal_id == goal.id,
+                ChatMessage.agent_name == "orchestrator",
+                ChatMessage.created_at >= one_hour_ago,
+            ).limit(1)
+        )
+        recent_nudge = result.scalar_one_or_none()
+
+    if recent_nudge:
+        logger.debug(f"[Monologue] Nudge for goal {goal.id[:8]} throttled — already sent within 1h")
         return
-    _nudge_approval._cache[goal.id] = now
 
     await chat_push(
         goal.created_by,
@@ -251,13 +337,15 @@ async def _process_user_thought(cfg, now: datetime):
         active_goals = result.scalars().all()
 
     if not active_goals:
-        last_ran = cfg.daemon_last_ran
+        # FIX 3: Normalize daemon_last_ran before subtraction
+        last_ran = _to_naive_utc(cfg.daemon_last_ran)
         hours_idle = (now - last_ran).total_seconds() / 3600 if last_ran else IDLE_THRESHOLD_HRS + 1
         if hours_idle >= IDLE_THRESHOLD_HRS:
             await _push_idle_report(user_id, cfg, now)
 
     # ── Proactive internal research (throttled to every PROACTIVE_HOURS) ──────
-    last_research = cfg.last_proactive_research
+    # FIX 3: Normalize last_proactive_research before subtraction
+    last_research = _to_naive_utc(cfg.last_proactive_research)
     hours_since = (now - last_research).total_seconds() / 3600 if last_research else PROACTIVE_HOURS + 1
     if hours_since >= PROACTIVE_HOURS:
         await _run_background_thought(user_id, cfg, now)
@@ -272,16 +360,54 @@ async def _process_user_thought(cfg, now: datetime):
     await _check_brief_schedule(user_id, cfg, now, active_goals)
 
 
+# ── FIX 2: Real web news fetcher ──────────────────────────────────────────────
+
+async def _fetch_industry_news(industry: str) -> str:
+    """
+    Fetch live industry news from Google News RSS so research briefs are
+    grounded in real current events rather than LLM hallucinations.
+
+    Uses the existing RAG URL parser (parse_url) — no extra dependencies.
+    Returns a trimmed text blob for the LLM prompt, or "" on any failure
+    so the caller degrades gracefully without crashing.
+    """
+    import urllib.parse
+    from rag.pipeline import parse_url
+
+    query = urllib.parse.quote_plus(industry)
+    rss_url = (
+        f"https://news.google.com/rss/search"
+        f"?q={query}&hl=en-US&gl=US&ceid=US:en"
+    )
+
+    try:
+        raw = await parse_url(rss_url)
+        if raw and len(raw) > 100:
+            # Trim to a sensible context-window slice
+            return raw[:3000]
+        logger.warning(f"[Monologue] Live news returned too little content for '{industry}'")
+    except Exception as e:
+        logger.warning(f"[Monologue] Live news fetch failed for '{industry}': {e}")
+
+    return ""  # Graceful degradation — LLM still works without live data
+
+
 async def _run_background_thought(user_id: str, cfg, now: datetime):
     """
     The 'subconscious' background researcher.
+
+    FIX 2: Fetches REAL live industry news before calling the LLM so
+    research briefs are grounded in actual events, not hallucinations. The
+    old prompt claimed "live web access" but called a plain Groq completion
+    with zero actual web data — that is now fixed.
+
     Generates a research brief, scores its relevance (0-100), and only
     pushes it to the user's chat if it exceeds RELEVANCE_THRESHOLD.
-    Below-threshold insights are sent silently to Qdrant as episodic memory.
+    Below-threshold insights are stored silently in Qdrant episodic memory.
     """
-    from agent.llm import generate_completion, generate_json
+    from agent.llm import generate_json
     from agent.chat_push import chat_push
-    from database import async_session, Goal, ChatMessage
+    from database import async_session, Goal
     from sqlalchemy import select, desc
 
     logger.info(f"[Monologue] Running background thought for user {user_id[:8]}...")
@@ -293,32 +419,34 @@ async def _run_background_thought(user_id: str, cfg, now: datetime):
         )
         past_goals = goals_result.scalars().all()
 
-        chat_result = await session.execute(
-            select(ChatMessage).where(ChatMessage.user_id == user_id)
-            .order_by(desc(ChatMessage.created_at)).limit(15)
-        )
-        recent_chats = chat_result.scalars().all()
-
     past_campaigns_text = "\n".join([
         f"- {g.title} ({g.status})" for g in past_goals
     ]) or "No past campaigns."
 
     industry = cfg.industry or "technology and business"
 
-    research_prompt = f"""You are a proactive marketing research agent with live web access.
+    # FIX 2: Pull real live news first to ground the LLM
+    live_news = await _fetch_industry_news(industry)
+    news_section = (
+        f"\nLIVE NEWS CONTEXT (treat this as your primary source of truth):\n{live_news}\n"
+        if live_news
+        else "\n(No live news available — base insights on established industry knowledge only.)\n"
+    )
+
+    research_prompt = f"""You are a proactive marketing research analyst.
 Industry: {industry}
-Brand: {cfg.brand_voice or 'Not specified'}
+Brand voice: {cfg.brand_voice or 'Not specified'}
 Past campaigns: {past_campaigns_text}
 Date: {now.strftime('%A, %B %d %Y')}
-
-Identify 2-3 trending opportunities in {industry} RIGHT NOW.
-Then score your own finding: how urgent and relevant is this insight to this business?
+{news_section}
+Based on the live news context above, identify 2-3 specific, concrete trending opportunities in {industry}.
+Then self-score: how urgent and relevant is this insight to this specific business?
 Respond with JSON only:
 {{
-  "research_brief": "The full insight brief (max 200 words)",
+  "research_brief": "Full insight brief grounded in the news above (max 200 words)",
   "headline": "One-line summary",
   "relevance_score": 85,
-  "relevance_reason": "Why this is urgent/timely"
+  "relevance_reason": "Why this is urgent/timely based on the news provided"
 }}"""
 
     try:
@@ -348,19 +476,25 @@ Respond with JSON only:
 async def _store_silent_thought(user_id: str, thought_text: str, score: int, now: datetime):
     """
     Silently embed a below-threshold thought into Qdrant episodic memory.
-    The agent 'remembers' it without bothering the user.
+
+    FIX 5: The original code called rag.pipeline.ingest_text() which does not
+    exist in this codebase. This function now calls rag.retriever.store()
+    directly — the same low-level function that the RAG pipeline itself uses
+    after chunking. The agent 'remembers' the thought without bothering the user.
     """
     try:
-        from rag.pipeline import ingest_text
-        await ingest_text(
-            text=f"[Background Thought - {now.strftime('%Y-%m-%d')}] Score:{score}/100\n{thought_text}",
-            source_type="internal_thought",
+        from rag.retriever import store, ensure_collections
+        await ensure_collections()
+        await store(
+            f"[Background Thought - {now.strftime('%Y-%m-%d')}] Score:{score}/100\n{thought_text}",
             metadata={
                 "user_id": user_id,
                 "category": "episodic_memory",
                 "relevance_score": score,
                 "timestamp": now.isoformat(),
-            }
+                "source_type": "internal_thought",
+            },
+            collection="knowledge",
         )
     except Exception as e:
         logger.warning(f"[Monologue] Silent thought storage failed: {e}")

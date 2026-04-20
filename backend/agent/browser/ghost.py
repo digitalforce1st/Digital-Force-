@@ -86,5 +86,11 @@ class GhostBrowser:
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             return page
 
+    @property
+    def is_running(self) -> bool:
+        """True if the Playwright engine was successfully initialised and is available."""
+        return self._playwright is not None
+
+
 # Global instance managed by FastAPI Lifespan
 ghost = GhostBrowser()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion } from 'framer-motion'
 import Sidebar from '@/components/Sidebar'
 import Link from 'next/link'
@@ -45,13 +45,36 @@ const stagger = {
 export default function OverviewPage() {
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [secsAgo, setSecsAgo] = useState(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchGoals = useCallback(async () => {
+    try {
+      const data = await api.goals.list()
+      setGoals(data)
+      setLastUpdated(new Date())
+      setSecsAgo(0)
+    } catch {
+      // silent — keep stale data visible
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    api.goals.list()
-      .then(setGoals)
-      .catch(() => setGoals([]))
-      .finally(() => setLoading(false))
-  }, [])
+    fetchGoals()
+    // Refresh every 30 seconds — keeps dashboard live during presentations
+    const refresh = setInterval(fetchGoals, 30_000)
+
+    // Tick the 'X seconds ago' counter every second
+    timerRef.current = setInterval(() => setSecsAgo(s => s + 1), 1_000)
+
+    return () => {
+      clearInterval(refresh)
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [fetchGoals])
 
   const activeGoals = goals.filter(g => ['planning','awaiting_approval','executing','monitoring'].includes(g.status))
   const awaiting = goals.filter(g => g.status === 'awaiting_approval')
@@ -77,9 +100,21 @@ export default function OverviewPage() {
                 }}>
                   Overview
                 </h1>
-                <p style={{ fontSize: '0.9rem', color: '#475569', fontWeight: 400 }}>
-                  Autonomous Digital Media Intelligent Agency
-                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <p style={{ fontSize: '0.9rem', color: '#475569', fontWeight: 400 }}>
+                    Autonomous Digital Media Intelligent Agency
+                  </p>
+                  {lastUpdated && (
+                    <span style={{
+                      fontSize: '0.65rem', color: '#1E3A5F', fontWeight: 700,
+                      letterSpacing: '0.06em', padding: '3px 8px',
+                      borderRadius: 6, background: 'rgba(0,163,255,0.06)',
+                      border: '1px solid rgba(0,163,255,0.12)',
+                    }}>
+                      LIVE · {secsAgo < 5 ? 'JUST NOW' : `${secsAgo}s AGO`}
+                    </span>
+                  )}
+                </div>
               </div>
               <Link href="/goals/new" style={{
                 display: 'inline-flex', alignItems: 'center', gap: 10,

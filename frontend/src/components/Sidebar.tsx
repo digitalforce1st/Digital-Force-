@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import {
   Zap, LayoutDashboard, Target, BarChart2,
   Cpu, Settings, MessageSquare,
-  LogOut, Activity, Network
+  LogOut, Activity, Network, Image
 } from 'lucide-react'
 import { clearToken, getUser } from '@/lib/auth'
 import api from '@/lib/api'
@@ -54,13 +54,13 @@ export default function Sidebar() {
   }, [])
 
   const NAV: NavItem[] = [
-    { href: '/chat',     label: 'Agentic Hub',     icon: MessageSquare, accent: '#00A3FF' },
-    { href: '/overview', label: 'Overview',         icon: LayoutDashboard },
-    { href: '/goals',    label: 'Tasks',       icon: Target, badge: awaitingCount || undefined },
-    { href: '/analytics',label: 'Analytics',        icon: BarChart2 },
-    { href: '/knowledge',label: 'Knowledge',        icon: Network },
-    { href: '/skills',   label: 'SkillForge',       icon: Cpu },
-    { href: '/settings', label: 'Settings',         icon: Settings },
+    { href: '/chat',     label: 'Agentic Hub',  icon: MessageSquare, accent: '#00A3FF' },
+    { href: '/overview', label: 'Overview',     icon: LayoutDashboard },
+    { href: '/goals',    label: 'Campaigns',    icon: Target, badge: awaitingCount || undefined },
+    { href: '/analytics',label: 'Analytics',   icon: BarChart2 },
+    { href: '/knowledge',label: 'Knowledge',   icon: Network },  // Training + Media Library tabs live inside here
+    { href: '/skills',   label: 'SkillForge',  icon: Cpu },
+    { href: '/settings', label: 'Settings',    icon: Settings },
   ]
 
   const STATUS_CONFIG = {

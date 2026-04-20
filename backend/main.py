@@ -4,6 +4,7 @@ Digital Force — Main FastAPI Application
 
 import sys
 import asyncio
+from typing import Set
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -40,6 +41,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# ── GC-safe task registry — prevents background workers being silently collected ─
+_STARTUP_TASKS: Set[asyncio.Task] = set()
+
+
+def _safe_startup_task(coro) -> asyncio.Task:
+    """Create a startup asyncio task pinned against GC until it completes."""
+    task = asyncio.create_task(coro)
+    _STARTUP_TASKS.add(task)
+    task.add_done_callback(_STARTUP_TASKS.discard)
+    return task
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,19 +77,32 @@ async def lifespan(app: FastAPI):
     logger.info(f"📡 Publishing: Buffer={bool(settings.buffer_access_token)} | Facebook={bool(settings.facebook_access_token)}")
 
     # 👻 Start the Ghost Browser (Persistent Session Playwright)
-    from agent.browser.ghost import ghost
-    await ghost.start()
+    # Wrapped in try/except — Playwright absence must NOT crash the entire server.
+    try:
+        from agent.browser.ghost import ghost
+        await ghost.start()
+        logger.info("✅ Ghost Browser initialized — Playwright sessions ready")
+    except Exception as e:
+        logger.warning(
+            f"⚠️  Ghost Browser unavailable ({e}). "
+            "Walled-garden research will fall back to web search. Non-fatal."
+        )
 
     # 🧠 Start the Internal Monologue Worker — replaces agency_daemon.py
     # Non-blocking. Paginated. Randomized sleep. The agent is now truly alive.
+    # GC-SAFE: pinned in _STARTUP_TASKS until the task completes (it never does — infinite loop).
     from langclaw_agents.monologue_worker import internal_monologue
-    asyncio.create_task(internal_monologue())
+    _safe_startup_task(internal_monologue())
     logger.info("🧠 Internal Monologue Worker started — Digital Force 2.0 is alive")
 
-    # 📧 Start the Inbox Poller — listining for user email replies
-    from agent.tools.email_inbox import poll_email_inbox
-    asyncio.create_task(poll_email_inbox())
-    logger.info("📧 IMAP Inbox Poller scheduled")
+    # 📧 Start the Inbox Poller — listening for user email replies
+    # GC-SAFE: same pattern as monologue worker.
+    try:
+        from agent.tools.email_inbox import poll_email_inbox
+        _safe_startup_task(poll_email_inbox())
+        logger.info("📧 IMAP Inbox Poller scheduled")
+    except Exception as e:
+        logger.warning(f"⚠️  Email Inbox Poller failed to start ({e}). Non-fatal.")
 
     logger.info("✨ Digital Force is ready.")
 

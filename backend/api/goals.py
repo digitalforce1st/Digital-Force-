@@ -15,7 +15,6 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 
 from database import get_db, Goal, AgentLog
-from database import get_db, Goal, AgentLog
 from auth import get_current_user
 from agent.tools.whatsapp_web import send_whatsapp_message
 
@@ -245,7 +244,13 @@ async def list_goals(
     db: AsyncSession = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    result = await db.execute(select(Goal).order_by(desc(Goal.created_at)).limit(50))
+    user_id = user.get("sub")
+    result = await db.execute(
+        select(Goal)
+        .where(Goal.created_by == user_id)   # Scoped to current user — no cross-user data leakage
+        .order_by(desc(Goal.created_at))
+        .limit(50)
+    )
     goals = result.scalars().all()
     returns = []
     for g in goals:
@@ -298,7 +303,8 @@ async def get_goal(
         "tasks_completed": goal.tasks_completed,
         "tasks_failed": goal.tasks_failed,
         "progress_percent": goal.progress_percent,
-        "kpi_snapshot": goal.last_monitor_at,
+        "kpi_snapshot": {},   # Populated by Monitor agent — empty until first monitoring cycle
+        "last_monitor_at": goal.last_monitor_at.isoformat() if goal.last_monitor_at else None,
         "agent_logs": logs,
         "created_at": goal.created_at.isoformat(),
         "deadline": goal.deadline.isoformat() if goal.deadline else None,
@@ -406,7 +412,7 @@ async def _run_execution_agent(goal_id: str):
 
 @router.get("/approve/{token}")
 async def approve_via_token(token: str, action: str = "approve", db: AsyncSession = Depends(get_db)):
-    """One-click email approval link."""
+    """One-click email approval link. FIXED: now actually fires the execution agent."""
     result = await db.execute(select(Goal).where(Goal.approval_token == token))
     goal = result.scalar_one_or_none()
     if not goal:
@@ -415,12 +421,24 @@ async def approve_via_token(token: str, action: str = "approve", db: AsyncSessio
         return {"status": goal.status, "message": f"Goal is already {goal.status}"}
 
     if action == "approve":
+        goal_id = goal.id
         goal.status = "executing"
         goal.approved_at = datetime.utcnow()
         await db.commit()
+
+        # CRITICAL FIX: Fire the execution agent — without this, the campaign
+        # was permanently stuck in 'executing' with nothing actually running.
+        import asyncio as _asyncio
+        _task = _asyncio.create_task(_run_execution_agent(goal_id))
+        # Hold a strong reference so the task is not GC'd before completion
+        if not hasattr(approve_via_token, "_tasks"):
+            approve_via_token._tasks = set()
+        approve_via_token._tasks.add(_task)
+        _task.add_done_callback(approve_via_token._tasks.discard)
+
         from fastapi.responses import RedirectResponse
         from config import get_settings
         s = get_settings()
-        return RedirectResponse(f"{s.frontend_url}/goals/{goal.id}?approved=true")
+        return RedirectResponse(f"{s.frontend_url}/goals/{goal_id}")
 
     return {"status": "pending", "goal_id": goal.id}

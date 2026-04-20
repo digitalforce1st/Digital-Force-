@@ -13,7 +13,7 @@ import os
 class Settings(BaseSettings):
     # ── App ──────────────────────────────────────────────
     app_name: str = "Digital Force"
-    app_version: str = "1.0.0"
+    app_version: str = "2.0.0"
     environment: str = "development"  # development | staging | production
     debug: bool = True
     base_url: str = "http://localhost:8000"
@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     groq_api_key_3: str = ""
     
     groq_primary_model: str = "llama-3.3-70b-versatile"
-    groq_secondary_model: str = "mixtral-8x7b-32768"
-    groq_fallback_model: str = "groq/compound"
+    groq_secondary_model: str = "llama-3.1-8b-instant"   # Fast, reliably available on Groq
+    groq_fallback_model: str = "gemma2-9b-it"              # Stable Groq fallback (replaces deprecated mixtral + invalid groq/compound)
     
     groq_max_tokens: int = 4096
     groq_temperature: float = 0.7
