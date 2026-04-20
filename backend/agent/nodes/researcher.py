@@ -32,85 +32,7 @@ async def search_open_web(query: str, platforms: list[str] = None) -> str:
     result = await search_social_trends(query, platforms or [])
     return str(result.get("results", []))
 
-@tool
-async def scrape_walled_garden_visually(platform: str, goal: str) -> str:
-    """Use this tool to physically spin up a headless browser, navigate to a walled garden (Instagram, Facebook, LinkedIn, TikTok), and use Llama-Vision to analyze the DOM."""
-    logger.info(f"[Researcher Tool] Ghost Visual Scrape requested for {platform}")
-    findings = await _ghost_visual_research(goal, platform)
-    return str(findings)
-
-async def _ghost_visual_research(goal: str, platform: str) -> dict:
-    """Uses Ghost Browser and Llama-Vision to scrape walled-gardens natively."""
-    from agent.browser.ghost import ghost
-    import urllib.parse
-    import base64
-    from config import get_settings
-    from groq import AsyncGroq
-    import asyncio
-    
-    # Fast check if playwright is running
-    try:
-        if not ghost.is_running:
-            return {"error": "Ghost browser not actively running or installed."}
-    except Exception:
-        return {"error": "Playwright integration failure."}
-    
-    query = urllib.parse.quote_plus(goal[:50])
-    if platform == "instagram":
-        url = f"https://www.instagram.com/explore/tags/{query.replace('+', '')}/"
-    elif platform == "facebook":
-        url = f"https://www.facebook.com/search/posts/?q={query}"
-    elif platform == "linkedin":
-        url = f"https://www.linkedin.com/search/results/content/?keywords={query}"
-    elif platform == "tiktok":
-        url = f"https://www.tiktok.com/search?q={query}"
-    else:
-        url = f"https://www.google.com/search?q=site:{platform}.com+{query}"
-        
-    try:
-        page = await ghost.get_page()
-        await page.goto(url, wait_until="networkidle")
-        await asyncio.sleep(4) # Let DOM settle
-        await page.evaluate("window.scrollBy(0, document.body.scrollHeight)") # Trigger lazy load
-        await asyncio.sleep(2)
-        
-        pic = "temp_vision_research.png"
-        await page.screenshot(path=pic)
-        await page.close()
-        
-        settings = get_settings()
-        key = settings.groq_api_key_1 or settings.groq_api_key_2 or settings.groq_api_key_3
-        client = AsyncGroq(api_key=key, max_retries=1)
-        
-        with open(pic, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-            
-        prompt = (f"You are a social media researcher. The user's goal is: {goal}. "
-                  f"Analyze this screenshot of {platform}. Identify trending topics, visual aesthetics, "
-                  "and any recurring themes. Extract JSON matching exactly: "
-                  "{\"trending_topics\": [\"topic1\"], \"recommended_hashtags\": {\"global\": []}, \"content_angles\": [\"angle1\"], \"audience_insights\": \"...\"}")
-                  
-        resp = await client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
-                ]
-            }],
-            max_tokens=600,
-            temperature=0.2
-        )
-        content = resp.choices[0].message.content
-        import re, json
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return {}
-    except Exception as e:
-        logger.error(f"[Vision Researcher] Failed natively scraping {platform}: {e}")
-        return {"error": str(e)}
+from agent.browser.react_browser import ghost_goto, ghost_scroll, ghost_analyze_viewport, ghost_click
 
 async def researcher_node(state: AgentState) -> dict:
     """
@@ -138,18 +60,20 @@ async def researcher_node(state: AgentState) -> dict:
     import re
     
     llm = get_tool_llm(temperature=0.2)
-    tools = [search_open_web, scrape_walled_garden_visually]
+    tools = [search_open_web, ghost_goto, ghost_scroll, ghost_analyze_viewport, ghost_click]
     
     sys_prompt = f"""You are the Lead Social Media Researcher in a Swarm architecture.
 Your objective is to find real-time trending topics and content angles for the user's goal.
 You are researching these specific platforms: {platforms}
 
-You have two tools:
-1. `search_open_web`: Fast and robust text intelligence scraping.
-2. `scrape_walled_garden_visually`: Launches a headless Chromium browser to visually inspect walled gardens (like TikTok/Instagram).
+You have access to standard web search, AND a Deep ReAct Ghost Browser.
+If researching a "walled garden" (Instagram, LinkedIn, Facebook, TikTok), you MUST use the physical browser tools:
+1. Use `ghost_goto` to navigate to a search URL (e.g. https://www.tiktok.com/search?q=xyz).
+2. Use `ghost_analyze_viewport` to see the current page structure via Llama-Vision.
+3. If no content is loaded, use `ghost_click` or `ghost_scroll` to navigate further, then analyze again.
 
 CRITICAL RULE:
-Once you have explored enough data, stop calling tools. Your final output MUST be EXACTLY a raw JSON object (and nothing else) matching this schema:
+Once you have explored enough data across your tools, stop calling tools. Your final output MUST be EXACTLY a raw JSON object (and nothing else) matching this schema:
 {{
   "trending_topics": ["topic1", "topic2"],
   "recommended_hashtags": {{"global": ["#tag"]}},
@@ -164,7 +88,7 @@ Once you have explored enough data, stop calling tools. Your final output MUST b
     try:
         final_state = await agent.ainvoke(
             {"messages": [HumanMessage(content=prompt)]},
-            {"recursion_limit": 6}
+            {"recursion_limit": 15}
         )
     except Exception as e:
         logger.error(f"[Researcher ReAct Engine] Halting due to recursion or exception: {e}")

@@ -124,6 +124,11 @@ export default function SettingsPage() {
   const [addingAccount, setAddingAccount] = useState(false)
   const [newAccount, setNewAccount] = useState({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
 
+  // WhatsApp Live Auth State
+  const [waModalOpen, setWaModalOpen] = useState(false)
+  const [waStatus, setWaStatus] = useState<any>(null)
+  const [waPolling, setWaPolling] = useState(false)
+
 
   useEffect(() => {
     Promise.all([api.settings.get(), api.settings.status()])
@@ -267,12 +272,51 @@ export default function SettingsPage() {
   const handleProvisionAccount = async (accountId: string) => {
     try {
       await fetch(`${BASE}/api/accounts/${accountId}/provision`, { method: 'POST', headers: authHeaders() })
-      // Redirect straight to chat so the user can interact with SkillForge's prompts
       window.location.href = '/chat'
     } catch (e) {
       setError('Failed to initiate autonomous provisioning.')
     }
   }
+
+  // ── WhatsApp Live Auth ──────────────────────────────────────────────────
+  let pollInterval: any;
+  const pollWaStatus = async () => {
+    try {
+      const res = await fetch(`${BASE}/api/whatsapp/status`, { headers: authHeaders() })
+      const data = await res.json()
+      setWaStatus(data)
+      if (data.authenticated) {
+        clearInterval(pollInterval)
+        setWaPolling(false)
+      } else if (data.timeout_detected) {
+        clearInterval(pollInterval)
+        setWaPolling(false)
+      }
+    } catch (e) { }
+  }
+
+  const handleWhatsappAuth = async () => {
+    setWaModalOpen(true)
+    setWaStatus(null)
+    setWaPolling(true)
+    await fetch(`${BASE}/api/whatsapp/request-qr`, { method: 'POST', headers: authHeaders() })
+    
+    pollWaStatus()
+    pollInterval = setInterval(pollWaStatus, 4000)
+  }
+
+  const handleClearWhatsapp = async () => {
+    await fetch(`${BASE}/api/whatsapp/clear-session`, { method: 'POST', headers: authHeaders() })
+    setWaStatus({ authenticated: false, qr_available: false })
+  }
+
+  useEffect(() => {
+    if (!waModalOpen) {
+      if (pollInterval) clearInterval(pollInterval)
+      setWaPolling(false)
+    }
+    return () => { if (pollInterval) clearInterval(pollInterval) }
+  }, [waModalOpen])
 
   const handleUpdateProfile = async () => {
     setProfileSaving(true)
@@ -472,9 +516,15 @@ export default function SettingsPage() {
                       <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', marginTop: 2 }}>Platform: {acc.platform}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={() => handleProvisionAccount(acc.id)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' }}>
-                        <Zap size={12} /> Auto Verify
-                      </button>
+                      {acc.platform === 'whatsapp' ? (
+                        <button onClick={handleWhatsappAuth} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+                          <QrCode size={12} /> Link Device
+                        </button>
+                      ) : (
+                        <button onClick={() => handleProvisionAccount(acc.id)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+                          <Zap size={12} /> Auto Verify
+                        </button>
+                      )}
                       <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', padding: 4 }}>
                         <Trash2 size={15} />
                       </button>
@@ -841,6 +891,56 @@ export default function SettingsPage() {
           </div>
         )}
       </main>
+
+      {/* WhatsApp Modal Overlay */}
+      {waModalOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="glass-panel" style={{ width: 400, maxWidth: '90%', padding: '2rem', position: 'relative', textAlign: 'center' }}>
+            <button onClick={() => setWaModalOpen(false)} style={{ position: 'absolute', top: 15, right: 15, background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
+              <X size={20} />
+            </button>
+            <QrCode size={40} color="#25D366" style={{ margin: '0 auto 1rem' }} />
+            <h3 style={{ margin: '0 0 0.5rem', color: '#fff' }}>WhatsApp Web Authentication</h3>
+            
+            {waStatus?.authenticated ? (
+              <div style={{ margin: '2rem 0', color: '#34D399' }}>
+                <CheckCircle2 size={50} style={{ margin: '0 auto 1rem' }} />
+                <p style={{ margin: 0, fontWeight: 600 }}>Device successfully linked!</p>
+                <button onClick={handleClearWhatsapp} style={{ marginTop: '1.5rem', background: 'none', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5', padding: '0.5rem 1rem', borderRadius: 8, fontSize: '0.8rem', cursor: 'pointer' }}>
+                  Unlink Device
+                </button>
+              </div>
+            ) : waStatus?.qr_available && waStatus.qr_image_b64 ? (
+              <div style={{ margin: '1.5rem 0' }}>
+                <div style={{ background: '#fff', padding: '1rem', borderRadius: 12, display: 'inline-block' }}>
+                  <img src={`data:image/png;base64,${waStatus.qr_image_b64}`} alt="WhatsApp QR Code" style={{ width: 250, height: 250, display: 'block' }} />
+                </div>
+                <p style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.6)', marginTop: '1rem' }}>
+                  Open WhatsApp on your phone &bull; Select Linked Devices &bull; Scan code
+                </p>
+                <div style={{ fontSize: '0.75rem', color: '#22D3EE', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <RefreshCw size={12} className={waPolling ? "animate-spin" : ""} /> Polling for status...
+                </div>
+              </div>
+            ) : waStatus?.timeout_detected ? (
+              <div style={{ margin: '2rem 0', color: '#FCA5A5' }}>
+                <AlertCircle size={40} style={{ margin: '0 auto 1rem' }} />
+                <p>Connection timed out or failed to load.</p>
+                <button onClick={handleWhatsappAuth} className="btn-primary" style={{ marginTop: '1rem' }}>
+                  Try Again
+                </button>
+              </div>
+            ) : (
+              <div style={{ margin: '3rem 0', color: 'rgba(255,255,255,0.6)' }}>
+                <RefreshCw size={35} className="animate-spin" style={{ margin: '0 auto 1rem', color: '#22D3EE' }} />
+                <p>Warming up Playwright engine... fetching QR code...</p>
+                <p style={{ fontSize: '0.7rem', opacity: 0.6 }}>(This can take up to 20 seconds)</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
