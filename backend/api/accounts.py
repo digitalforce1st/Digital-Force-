@@ -87,35 +87,87 @@ async def delete_account(account_id: str, db: AsyncSession = Depends(get_db), cu
 
 @router.post("/{account_id}/provision")
 async def provision_account(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
-    """Triggers the Agentic Auth flow for a specific account via the Orchestrator."""
+    """
+    Fires a deep ReAct browser agent to physically connect a social account.
+
+    The agent:
+    1. Navigates to the platform login page
+    2. Uses Ghost Browser vision to locate and fill the login form
+    3. Handles 2FA, CAPTCHAs, and QR codes by communicating through the Agentic Hub
+    4. On success, updates connection_status = 'connected' and stores session cookies
+    5. On failure, updates connection_status = 'needs_reauth' and reports why
+
+    All progress is pushed live to the user's chat via chat_push.
+    """
     from database import Goal
+    from agent.chat_push import chat_push
     import json
     import asyncio
-    
+
     stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
     result = await db.execute(stmt)
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    user_id = current_user.get("sub", "")
+
+    # Mark as connecting immediately so the UI shows feedback
+    acc.connection_status = "connecting"
+    await db.commit()
+
+    # Build a rich goal description with all credential context for the agent
+    goal_description = f"""SYSTEM_AUTH_PROVISION: Connect the social media account described below using the Ghost Browser agent.
+
+Platform: {acc.platform}
+Account Display Name: {acc.display_name}
+Account Label: {acc.account_label}
+Account ID (Truth Bucket): {acc.id}
+Credentials / Auth Instructions:
+{acc.auth_data or 'No credentials provided. Check the platform for OAuth flow.'}
+
+AGENT INSTRUCTIONS:
+1. Navigate to the {acc.platform} login page
+2. Use ghost_see to analyze the page and locate the login form
+3. Use ghost_type to enter credentials naturally (human-speed keystrokes)
+4. Handle any 2FA, SMS code, or CAPTCHA by communicating through chat_push asking the operator
+5. If a QR code is required (WhatsApp, WeChat), take a screenshot and push it to the operator via chat
+6. On successful login, verify the session by checking the post-login page
+7. Update the account connection_status to 'connected' in the database
+8. If login fails after 3 attempts, update connection_status to 'needs_reauth' and explain why
+
+Always report progress steps through the Agentic Hub so the operator can see what is happening.
+Never store raw passwords in logs."""
+
     goal_id = str(uuid.uuid4())
     new_goal = Goal(
         id=goal_id,
-        created_by=current_user.get("sub"),
-        title=f"Authenticate {acc.platform} ({acc.account_label})",
-        description=f"SYSTEM_AUTH_PROVISION: Start autonomous browser flow to authenticate account '{acc.account_label}' on platform '{acc.platform}'. Credentials might be in auth_data: '{acc.auth_data}'",
+        created_by=user_id,
+        title=f"Connect {acc.platform.capitalize()} — {acc.account_label}",
+        description=goal_description,
         platforms=json.dumps([acc.platform]),
         status="executing",
     )
     db.add(new_goal)
     await db.commit()
 
-    # Fire the Orchestrator ReAct Loop in the background
+    # Push immediate feedback to the Agentic Hub
+    await chat_push(
+        user_id=user_id,
+        content=f"Browser agent dispatched to connect {acc.platform.capitalize()} account \"{acc.display_name}\". "
+                f"I will report every step here. If I need anything from you (2FA code, QR scan, CAPTCHA), I will ask here.",
+        agent_name="skillforge",
+        goal_id=goal_id,
+    )
+
+    # Fire the Orchestrator ReAct Loop in the background (GC-safe)
+    import logging
+    _logger = logging.getLogger(__name__)
     try:
         from langclaw_agents.orchestrator_app import run_orchestration
-        asyncio.create_task(run_orchestration(goal_id, trigger_source="settings_provision"))
+        from langclaw_agents.monologue_worker import _safe_create_task
+        _safe_create_task(run_orchestration(goal_id, trigger_source="settings_provision"))
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Failed to dispatch auth provision: {e}")
+        _logger.error(f"Failed to dispatch auth provision: {e}")
 
-    return {"status": "provisioning", "goal_id": goal_id}
+    return {"status": "provisioning", "goal_id": goal_id, "account_id": account_id}

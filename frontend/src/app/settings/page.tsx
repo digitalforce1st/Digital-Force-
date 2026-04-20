@@ -235,21 +235,57 @@ export default function SettingsPage() {
     setBriefSlots(prev => prev.filter(s => s.id !== id))
   }
 
+  const [connectingAccounts, setConnectingAccounts] = useState<Record<string, boolean>>({})
+
   const handleAddAccount = async () => {
     if (!newAccount.platform || !newAccount.display_name || !newAccount.account_label) return
     try {
+      // Step 1: Save to DB — get back the account ID
       const res = await fetch(`${BASE}/api/accounts`, {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify(newAccount)
+        body: JSON.stringify({ ...newAccount, connection_status: 'connecting' })
       })
-      if (res.ok) {
-        const data = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r=>r.json())
-        setAccounts(data)
-        setAddingAccount(false)
-        setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
+      if (!res.ok) throw new Error('Failed to save account')
+      const saved = await res.json()
+      const accountId = saved.id
+
+      // Step 2: Refresh accounts list immediately
+      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+      if (Array.isArray(fresh)) setAccounts(fresh)
+      setAddingAccount(false)
+      setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
+
+      // Step 3: Fire the deep browser agent to actually connect the account
+      // The agent navigates to the platform, logs in with the credentials,
+      // and reports back progress through the Agentic Hub (chat)
+      if (accountId) {
+        setConnectingAccounts(prev => ({ ...prev, [accountId]: true }))
+        await fetch(`${BASE}/api/accounts/${accountId}/provision`, {
+          method: 'POST',
+          headers: authHeaders()
+        })
+        // Poll for status updates every 5 seconds
+        const poll = setInterval(async () => {
+          try {
+            const updated = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+            if (Array.isArray(updated)) {
+              setAccounts(updated)
+              const thisAcc = updated.find((a: any) => a.id === accountId)
+              if (thisAcc && thisAcc.connection_status !== 'connecting') {
+                setConnectingAccounts(prev => { const n = { ...prev }; delete n[accountId]; return n })
+                clearInterval(poll)
+              }
+            }
+          } catch {}
+        }, 5000)
+        // Stop polling after 3 minutes max
+        setTimeout(() => {
+          clearInterval(poll)
+          setConnectingAccounts(prev => { const n = { ...prev }; delete n[accountId]; return n })
+        }, 180000)
       }
-    } catch (e) { setError('Failed to add account') }
+    } catch (e) { setError('Failed to connect account') }
   }
 
   const handleDeleteAccount = async (id: string) => {
@@ -509,28 +545,65 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {accounts.map(acc => (
-                  <div key={acc.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', marginBottom: 8 }}>
-                    <div>
-                      <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 500 }}>{acc.display_name} <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem', marginLeft: 6 }}>({acc.account_label})</span></div>
-                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', marginTop: 2 }}>Platform: {acc.platform}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      {acc.platform === 'whatsapp' ? (
-                        <button onClick={handleWhatsappAuth} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' }}>
-                          <QrCode size={12} /> Link Device
+              {accounts.map(acc => {
+                const isConnecting = connectingAccounts[acc.id]
+                const statusColor = {
+                  connected: '#34D399',
+                  connecting: '#FBBF24',
+                  needs_reauth: '#F87171',
+                  failed: '#F87171',
+                }[acc.connection_status as string] || 'rgba(255,255,255,0.2)'
+                const statusLabel = {
+                  connected: 'Connected',
+                  connecting: 'Agent connecting...',
+                  needs_reauth: 'Needs re-auth',
+                  failed: 'Failed',
+                }[acc.connection_status as string] || acc.connection_status || 'Unknown'
+
+                return (
+                  <div key={acc.id} style={{ padding: '0.875rem 1rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: `1px solid ${isConnecting ? 'rgba(251,191,36,0.25)' : 'rgba(255,255,255,0.07)'}`, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 600 }}>{acc.display_name}</div>
+                          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>({acc.account_label})</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                          <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{acc.platform}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor, boxShadow: isConnecting ? `0 0 6px ${statusColor}` : 'none', animation: isConnecting ? 'pulse 1.5s infinite' : 'none' }} />
+                            <span style={{ fontSize: '0.72rem', color: statusColor }}>{statusLabel}</span>
+                          </div>
+                        </div>
+                        {isConnecting && (
+                          <div style={{ marginTop: 6, fontSize: '0.72rem', color: 'rgba(251,191,36,0.7)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <RefreshCw size={10} className="animate-spin" />
+                            Browser agent connecting — check the Agentic Hub for live updates
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 12 }}>
+                        {acc.platform === 'whatsapp' ? (
+                          <button onClick={handleWhatsappAuth} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.3rem 0.7rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+                            <QrCode size={12} /> Link Device
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleProvisionAccount(acc.id)}
+                            disabled={isConnecting}
+                            style={{ display: 'flex', alignItems: 'center', gap: 6, background: isConnecting ? 'rgba(255,255,255,0.05)' : 'rgba(34,211,238,0.1)', border: `1px solid ${isConnecting ? 'rgba(255,255,255,0.08)' : 'rgba(34,211,238,0.2)'}`, color: isConnecting ? 'rgba(255,255,255,0.3)' : '#22D3EE', borderRadius: 6, padding: '0.3rem 0.7rem', fontSize: '0.75rem', cursor: isConnecting ? 'not-allowed' : 'pointer' }}>
+                            <Zap size={12} />
+                            {isConnecting ? 'Connecting...' : acc.connection_status === 'connected' ? 'Re-connect' : 'Connect'}
+                          </button>
+                        )}
+                        <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', padding: 4 }}>
+                          <Trash2 size={15} />
                         </button>
-                      ) : (
-                        <button onClick={() => handleProvisionAccount(acc.id)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', color: '#22D3EE', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' }}>
-                          <Zap size={12} /> Auto Verify
-                        </button>
-                      )}
-                      <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', padding: 4 }}>
-                        <Trash2 size={15} />
-                      </button>
+                      </div>
                     </div>
                   </div>
-              ))}
+                )
+              })}
 
               {addingAccount && (
                 <div style={{ marginTop: 12, padding: '1rem', borderRadius: 12, background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)' }}>
@@ -571,9 +644,20 @@ export default function SettingsPage() {
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                     <button onClick={() => setAddingAccount(false)}
                       style={{ padding: '0.5rem 1rem', borderRadius: 8, background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>
-                    <button onClick={handleAddAccount} disabled={!newAccount.platform || !newAccount.display_name || !newAccount.account_label}
-                      style={{ padding: '0.5rem 1rem', borderRadius: 8, background: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'linear-gradient(135deg,#06b6d4,#3b82f6)' : 'rgba(255,255,255,0.05)', border: 'none', color: '#fff', fontSize: '0.8rem', cursor: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'pointer' : 'not-allowed' }}>
-                      Save Account
+                    <button
+                      onClick={handleAddAccount}
+                      disabled={!newAccount.platform || !newAccount.display_name || !newAccount.account_label}
+                      style={{
+                        padding: '0.5rem 1.25rem', borderRadius: 8,
+                        background: (newAccount.platform && newAccount.display_name && newAccount.account_label)
+                          ? 'linear-gradient(135deg,#06b6d4,#3b82f6)'
+                          : 'rgba(255,255,255,0.05)',
+                        border: 'none', color: '#fff', fontSize: '0.85rem', fontWeight: 600,
+                        cursor: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'pointer' : 'not-allowed',
+                        display: 'flex', alignItems: 'center', gap: 6,
+                      }}>
+                      <Zap size={14} />
+                      Connect Account
                     </button>
                   </div>
                 </div>
