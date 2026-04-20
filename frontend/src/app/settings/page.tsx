@@ -236,19 +236,38 @@ export default function SettingsPage() {
   }
 
   const [connectingAccounts, setConnectingAccounts] = useState<Record<string, boolean>>({})
+  const [isSubmittingAccount, setIsSubmittingAccount] = useState(false)
+  const [accountError, setAccountError] = useState('')
 
   const handleAddAccount = async () => {
-    if (!newAccount.platform || !newAccount.display_name || !newAccount.account_label) return
+    // Validate required fields with visible feedback
+    if (!newAccount.platform) { setAccountError('Platform is required'); return }
+    if (!newAccount.display_name) { setAccountError('Display Name is required'); return }
+    if (!newAccount.account_label) { setAccountError('Account Label is required'); return }
+
+    setIsSubmittingAccount(true)
+    setAccountError('')
+
     try {
+      console.log('[Connect Account] Saving to DB...', newAccount)
+
       // Step 1: Save to DB — get back the account ID
       const res = await fetch(`${BASE}/api/accounts`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ ...newAccount, connection_status: 'connecting' })
       })
-      if (!res.ok) throw new Error('Failed to save account')
+
+      console.log('[Connect Account] Save response:', res.status)
+
+      if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`Save failed (${res.status}): ${errText}`)
+      }
+
       const saved = await res.json()
       const accountId = saved.id
+      console.log('[Connect Account] Saved, ID:', accountId)
 
       // Step 2: Refresh accounts list immediately
       const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
@@ -256,15 +275,23 @@ export default function SettingsPage() {
       setAddingAccount(false)
       setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
 
-      // Step 3: Fire the deep browser agent to actually connect the account
-      // The agent navigates to the platform, logs in with the credentials,
-      // and reports back progress through the Agentic Hub (chat)
+      // Step 3: Fire the browser agent to connect the account
       if (accountId) {
         setConnectingAccounts(prev => ({ ...prev, [accountId]: true }))
-        await fetch(`${BASE}/api/accounts/${accountId}/provision`, {
+
+        console.log('[Connect Account] Firing provision agent for', accountId)
+        const provRes = await fetch(`${BASE}/api/accounts/${accountId}/provision`, {
           method: 'POST',
           headers: authHeaders()
         })
+        console.log('[Connect Account] Provision response:', provRes.status)
+
+        if (!provRes.ok) {
+          const errText = await provRes.text()
+          console.error('[Connect Account] Provision failed:', errText)
+          // Don't throw — account was saved, just agent dispatch failed
+        }
+
         // Poll for status updates every 5 seconds
         const poll = setInterval(async () => {
           try {
@@ -279,13 +306,17 @@ export default function SettingsPage() {
             }
           } catch {}
         }, 5000)
-        // Stop polling after 3 minutes max
         setTimeout(() => {
           clearInterval(poll)
           setConnectingAccounts(prev => { const n = { ...prev }; delete n[accountId]; return n })
         }, 180000)
       }
-    } catch (e) { setError('Failed to connect account') }
+    } catch (e: any) {
+      console.error('[Connect Account] ERROR:', e)
+      setAccountError(e?.message || 'Failed to connect account — check the browser console')
+    } finally {
+      setIsSubmittingAccount(false)
+    }
   }
 
   const handleDeleteAccount = async (id: string) => {
@@ -641,23 +672,30 @@ export default function SettingsPage() {
                       placeholder="e.g. Email: user@acme.com&#10;Password: password123&#10;2FA Recovery: 123456" rows={3}
                       style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none', resize: 'vertical' }} />
                   </div>
+                  {/* Inline error */}
+                  {accountError && (
+                    <div style={{ padding: '0.6rem 0.875rem', borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5', fontSize: '0.8rem', marginBottom: 8 }}>
+                      {accountError}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button onClick={() => setAddingAccount(false)}
+                    <button onClick={() => { setAddingAccount(false); setAccountError('') }}
                       style={{ padding: '0.5rem 1rem', borderRadius: 8, background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>
                     <button
                       onClick={handleAddAccount}
-                      disabled={!newAccount.platform || !newAccount.display_name || !newAccount.account_label}
+                      disabled={isSubmittingAccount}
                       style={{
                         padding: '0.5rem 1.25rem', borderRadius: 8,
-                        background: (newAccount.platform && newAccount.display_name && newAccount.account_label)
-                          ? 'linear-gradient(135deg,#06b6d4,#3b82f6)'
-                          : 'rgba(255,255,255,0.05)',
+                        background: isSubmittingAccount ? 'rgba(6,182,212,0.4)' : 'linear-gradient(135deg,#06b6d4,#3b82f6)',
                         border: 'none', color: '#fff', fontSize: '0.85rem', fontWeight: 600,
-                        cursor: (newAccount.platform && newAccount.display_name && newAccount.account_label) ? 'pointer' : 'not-allowed',
-                        display: 'flex', alignItems: 'center', gap: 6,
+                        cursor: isSubmittingAccount ? 'not-allowed' : 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6, minWidth: 160,
+                        opacity: isSubmittingAccount ? 0.8 : 1,
                       }}>
-                      <Zap size={14} />
-                      Connect Account
+                      {isSubmittingAccount
+                        ? <><RefreshCw size={14} className="animate-spin" /> Connecting...</>
+                        : <><Zap size={14} /> Connect Account</>
+                      }
                     </button>
                   </div>
                 </div>
