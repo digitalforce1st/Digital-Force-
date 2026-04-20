@@ -122,7 +122,8 @@ async def dispatch_content_director(goal_id: str, user_id: str, goal_description
                                      campaign_plan: dict,
                                      research_findings: dict,
                                      completed_task_ids: list,
-                                     current_task_id: Optional[str] = None) -> dict:
+                                     current_task_id: Optional[str] = None,
+                                     asset_ids: list = None) -> dict:
     """Kick off the content director spoke for a single platform task."""
     try:
         from agent.nodes.content_director import content_director_node
@@ -136,7 +137,8 @@ async def dispatch_content_director(goal_id: str, user_id: str, goal_description
             "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
             "human_feedback": None, "new_skills_created": [], "next_agent": None,
             "target_agent": None, "risk_score": None, "error": None,
-            "iteration_count": 0, "asset_ids": [], "deadline": None,
+            "iteration_count": 0, "asset_ids": asset_ids or [],  # ← FIXED: forward goal assets
+            "deadline": None,
             "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
             "current_task_id": current_task_id,
         }
@@ -283,6 +285,14 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
         campaign_plan = json.loads(goal.plan or "{}")
         tasks = campaign_plan.get("tasks", []) 
 
+    # Tell the user immediately that the swarm has woken up
+    await chat_push(
+        user_id=user_id,
+        content=f"Swarm activated for: {goal_description[:100]}. Platforms: {', '.join(platforms) if platforms else 'auto-detect'}. Beginning autonomous execution now.",
+        agent_name="orchestrator",
+        goal_id=goal_id,
+    )
+
     memory = await retrieve_episodic_memory(goal_description, " ".join(platforms))
     research_findings = {} 
     
@@ -324,11 +334,15 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
             )
 
             if action == "DISPATCH_RESEARCHER":
+                await chat_push(user_id, "Researcher agent scanning the web and social platforms for live trends and audience insights...", "researcher", goal_id)
                 res = await dispatch_researcher(goal_id, user_id, goal_description, platforms)
                 if res["status"] == "ok":
                     research_findings = res["research_findings"]
+                    topics = research_findings.get("trending_topics", [])
+                    await chat_push(user_id, f"Research complete. Found {len(topics)} trending topics: {', '.join(topics[:3])}", "researcher", goal_id)
 
             elif action == "DISPATCH_STRATEGIST":
+                await chat_push(user_id, "Strategist building your campaign plan from research data...", "strategist", goal_id)
                 res = await dispatch_strategist(goal_id, user_id, goal_description, platforms, research_findings, deadline, success_metrics, constraints, asset_ids)
                 if res["status"] == "ok":
                     campaign_plan = res.get("campaign_plan", {})
@@ -336,12 +350,14 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
                     for t in tasks:
                         if not t.get("id"):
                             t["id"] = str(uuid.uuid4())
+                    await chat_push(user_id, f"Campaign plan ready: {campaign_plan.get('campaign_name', 'Campaign')} with {len(tasks)} tasks. Beginning content generation.", "strategist", goal_id)
 
             elif action == "DISPATCH_CONTENT_DIRECTOR":
                 content_tasks = [t for t in tasks if t.get("task_type") == "generate_content" and t.get("id") not in completed_ids and t.get("id") not in failed_ids]
+                await chat_push(user_id, f"Content Director writing {len(content_tasks)} piece(s) of content across platforms...", "content_director", goal_id)
                 
                 async def _gen_content(task):
-                    c_res = await dispatch_content_director(goal_id, user_id, goal_description, task.get("platform", ""), tasks, campaign_plan, research_findings, completed_ids, task.get("id"))
+                    c_res = await dispatch_content_director(goal_id, user_id, goal_description, task.get("platform", ""), tasks, campaign_plan, research_findings, completed_ids, task.get("id"), asset_ids=asset_ids)
                     if c_res["status"] == "ok":
                         completed_ids.append(task.get("id"))
                         for r in c_res.get("content_swarm_results", []):
@@ -380,6 +396,7 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
 
             elif action == "COMPLETE":
                 final_status = "completed"
+                await chat_push(user_id, f"All campaign tasks finished. {len(completed_ids)} of {len(tasks)} completed successfully. Your campaign is now live.", "orchestrator", goal_id)
                 break
                 
             elif action == "PAUSE":
