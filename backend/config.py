@@ -35,17 +35,42 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_password: Optional[str] = None
 
-    # ── AI Ecosystem: Groq Cluster (9 Models Cascade) ─────
+    # ── AI Ecosystem: Groq Key Cluster (up to 10 keys = 30 cascade slots) ─────
+    # Add keys as GROQ_API_KEY_1 through GROQ_API_KEY_10 in your .env
+    # Each key = 100k tokens/day free. 10 keys = 1M tokens/day = ~666 content pieces/day
     groq_api_key_1: str = ""
     groq_api_key_2: str = ""
     groq_api_key_3: str = ""
-    
+    groq_api_key_4: str = ""
+    groq_api_key_5: str = ""
+    groq_api_key_6: str = ""
+    groq_api_key_7: str = ""
+    groq_api_key_8: str = ""
+    groq_api_key_9: str = ""
+    groq_api_key_10: str = ""
+
+    # Groq models (best → fast → stable)
     groq_primary_model: str = "llama-3.3-70b-versatile"
-    groq_secondary_model: str = "llama-3.1-8b-instant"   # Fast, reliably available on Groq
-    groq_fallback_model: str = "gemma2-9b-it"              # Stable Groq fallback (replaces deprecated mixtral + invalid groq/compound)
-    
+    groq_secondary_model: str = "llama-3.1-8b-instant"
+    groq_fallback_model: str = "gemma2-9b-it"
+
     groq_max_tokens: int = 4096
     groq_temperature: float = 0.7
+
+    # ── Additional AI Providers (optional — extend capacity beyond Groq) ─────
+    openai_api_key: str = ""        # GPT-4o-mini: cheap, high-cap, reliable
+    together_api_key: str = ""      # Llama/Mixtral: cheap bulk inference
+    gemini_api_key: str = ""        # Gemini 1.5 Flash: generous free tier
+
+    @property
+    def all_groq_keys(self) -> list[str]:
+        """Returns all configured Groq API keys as a flat list, filtering empties."""
+        return [k for k in [
+            self.groq_api_key_1, self.groq_api_key_2, self.groq_api_key_3,
+            self.groq_api_key_4, self.groq_api_key_5, self.groq_api_key_6,
+            self.groq_api_key_7, self.groq_api_key_8, self.groq_api_key_9,
+            self.groq_api_key_10,
+        ] if k]
 
     # ── Vector DB: Qdrant ─────────────────────────────────
     qdrant_url: str = ""                          # Cloud: https://xxx.qdrant.io
