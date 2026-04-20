@@ -86,6 +86,7 @@ Rules:
 - After tool results, synthesize a concise, expert final answer.
 - Never use `push_to_chat` — your final AIMessage is delivered automatically.
 - Be direct, confident, and enterprise-grade in tone.
+- IMPORTANT: DO NOT use markdown asterisks (`*` or `**`) to bold text anywhere in your output. Return plain text without formatting symbols.
 """
     messages.insert(0, SystemMessage(content=system_prompt))
 

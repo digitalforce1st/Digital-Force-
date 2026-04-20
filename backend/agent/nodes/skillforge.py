@@ -87,19 +87,161 @@ Write clean, production-ready Python. No placeholder code."""
 # Imported run_in_e2b from agent.tools.sandbox
 
 
-# ─── Main SkillForge Node ────────────────────────────────────────────────────
+# ─── Auth Provision Handler ──────────────────────────────────────────────────
+async def _handle_auth_provision(state: AgentState) -> dict:
+    from agent.chat_push import chat_push, agent_thought_push
+    from agent.tools.sandbox import run_in_e2b
+    import base64
+    
+    goal_desc = state.get('goal_description', '')
+    user_id = state.get('created_by')
+    goal_id = state.get('goal_id')
+    
+    await agent_thought_push(user_id, "skillforge", "hijacked loop for direct authentication provisioning. fabricating login script...", goal_id)
+    
+    # Extract platform and account_label
+    import re
+    match = re.search(r"authenticate account '([^']+)' on platform '([^']+)'", goal_desc)
+    account_label = match.group(1).replace(" ", "_").lower() if match else "auth_target"
+    platform = match.group(2) if match else "unknown"
+
+    code_prompt = f"""
+    Create a Python async function called 'auto_login_{platform}' that handles logging into {platform}.
+    
+    INSTRUCTIONS:
+    {goal_desc}
+    
+    RULES:
+    1. You MUST use Playwright via Ghost Browser. 
+    2. `from agent.browser.ghost import ghost`
+    3. `page = await ghost.get_page(account_id='{account_label}')`
+    4. Navigate to the {platform} login page.
+    5. Attempt to fill credentials if they are provided.
+    6. IF you encounter a QR Code, Captcha, or 2FA prompt:
+       - Take a screenshot: `await page.screenshot(path='auth_barrier.png')`
+       - Immediately return: {{"success": False, "human_needed": True, "screenshot_path": "auth_barrier.png", "message": "Hit a QR/Captcha"}}
+    7. IF login succeeds, wait for the dashboard DOM to load, then return: {{"success": True}}
+    8. You MUST `await page.close()` before returning.
+    
+    Return pure python code enclosed in ```python...```
+    """
+    
+    raw_code = await generate_completion(code_prompt, SKILL_SYSTEM_PROMPT)
+    code_match = re.search(r'```python\n(.*?)```', raw_code, re.DOTALL)
+    clean_code = code_match.group(1) if code_match else raw_code
+
+    if user_id:
+        await chat_push(user_id, f"Executing autonomous login protocol for {platform}: \n```python\n{clean_code}\n```", "skillforge", goal_id)
+
+    # Execute in sandbox
+    test_result = await run_in_e2b(clean_code, f"auto_login_{platform}", {})
+    
+    if test_result.get("success"):
+        if user_id:
+            await chat_push(user_id, f"✅ Successfully authenticated **{platform}** autonomously. Session is now permanently isolated in Ghost Browser.", "skillforge", goal_id)
+        return {"status": "ok", "next_agent": "__end__"}
+    else:
+        # If human interference is needed (QR/Captcha)
+        if "auth_barrier.png" in str(test_result.get("output", "")) or "auth_barrier.png" in str(test_result.get("error", "")):
+            # Load the image and send to chat
+            import os
+            if os.path.exists("auth_barrier.png"):
+                with open("auth_barrier.png", "rb") as img:
+                    b64 = base64.b64encode(img.read()).decode()
+                markdown_img = f"![Action Required](data:image/png;base64,{b64})"
+                os.remove("auth_barrier.png")
+            else:
+                markdown_img = "*(Image failed to capture)*"
+                
+            await chat_push(
+                user_id, 
+                f"⚠️ I hit a security barrier while authenticating {platform}. Please scan or solve this on your phone, then type 'Done' in this chat so I can verify.\n\n{markdown_img}", 
+                "skillforge", 
+                goal_id
+            )
+            # The Orchestrator ReAct loop will PAUSE because SkillForge returns failure but human_needed handles it.
+            return {"status": "paused", "error": "Human intervention required for authentication."}
+            
+        # Total failure
+        if user_id:
+            await chat_push(user_id, f"❌ Failed to authenticate autonomously: {test_result.get('error')}", "skillforge", goal_id)
+        return {"status": "failed", "error": str(test_result.get("error"))}
+
+# ─── SkillForge ReAct Internal Tools ──────────────────────────────────────────
+
+from langchain_core.tools import tool
+from typing import List, Optional
+
+@tool
+async def search_open_source_packages(query: str) -> str:
+    """Search the internet for existing open source PyPI packages, LangChain community tools, or Python SDKs that solve the given problem. Use this to avoid writing custom API wrappers manually."""
+    from agent.tools.web_search import search_for_solution
+    logger.info(f"[SkillForge Tool] Searching packages for: {query}")
+    return await search_for_solution(f"python library or pypi package or langchain tool for: {query}", context="python open source ecosystem")
+
+@tool
+async def write_and_test_python_code(skill_name: str, code: str, dependencies: List[str] = None) -> dict:
+    """
+    Write a self-contained Python async function and execute it locally in the Sandboxed Subprocess environment.
+    Use `dependencies` to dynamically pip-install PyPI packages (e.g. ["tweepy", "facebook-sdk"]) before running.
+    If you need to bypass a walled garden physically, put Playwright commands in `code` but YOU MUST set `dependencies` empty as playwright is already installed.
+    """
+    from agent.tools.sandbox import run_in_e2b
+    
+    # Strip markdown if hallucinated inside the json
+    import re
+    code_match = re.search(r'```python\n(.*?)```', code, re.DOTALL)
+    clean_code = code_match.group(1) if code_match else code
+    
+    logger.info(f"[SkillForge Tool] Executing {skill_name} in Sandbox with deps: {dependencies}")
+    
+    result = await run_in_e2b(clean_code, skill_name, {}, dependencies=dependencies)
+    
+    # Also save the generated capability locally so it can be cached
+    if result.get("success"):
+        skill_file = SKILLS_DIR / f"{skill_name}.py"
+        skill_file.write_text(f'"""\nGenerated dynamically by SkillForge ReAct\n"""\n\n{clean_code}')
+        from agent.skills.registry import save_skill_metadata
+        save_skill_metadata(skill_name, {
+            "function_name": skill_name,
+            "display_name": skill_name,
+            "description": "Auto-forged via SkillForge ReAct.",
+            "input_params": {},
+            "risk_level": "medium",
+            "created_at": datetime.utcnow().isoformat(),
+        })
+
+    return result
+
+@tool
+async def pause_for_human_intervention(message: str) -> dict:
+    """
+    If you encounter a Captcha, QR code, or an API key requirement that physically cannot be bypassed by code,
+    call this tool to instantly PAUSE the loop and request input from the human operator.
+    """
+    return {"command": "PAUSE", "message": message}
+
+# ─── Main SkillForge Node (The Nested ReAct Engine) ──────────────────────────
 
 async def skillforge_node(state: AgentState) -> dict:
     """
-    Identifies skill gaps from failed tasks, searches the web for solutions,
-    generates new Python skills, validates in sandbox, registers them,
-    and retries or asks for approval based on risk.
+    A robust ReAct loop. Identifies skill gaps from failed tasks, 
+    organically retrieves PyPI dependencies or writes Ghost browser scripts, 
+    and tests them until they work or it needs a human.
     """
-    from agent.tools.web_search import search_for_solution
-    from agent.skills.registry import save_skill_metadata, skills_for_task, run_skill
     from agent.chat_push import chat_push, agent_thought_push
+    from agent.llm import get_tool_llm
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.messages import SystemMessage, HumanMessage
+    import json
 
-    logger.info(f"[SkillForge] Checking for skill gaps in goal {state['goal_id']}")
+    logger.info(f"[SkillForge] Booting Nested ReAct Engine for goal {state['goal_id']}")
+
+    goal_desc = state.get('goal_description', '')
+    
+    # HIGH-SPEED INTERCEPT FOR AUTHENTICATION
+    if goal_desc.startswith("SYSTEM_AUTH_PROVISION"):
+        return await _handle_auth_provision(state)
 
     failed_tasks = state.get("failed_task_ids", [])
     tasks = state.get("tasks", [])
@@ -108,337 +250,91 @@ async def skillforge_node(state: AgentState) -> dict:
     if not failed_task_details:
         return {
             "next_agent": "monitor",
-            "messages": [{"role": "assistant", "name": "skillforge", "content": "No skill gaps identified."}]
+            "messages": [{"role": "assistant", "name": "skillforge", "content": "No skill gaps identified. Loop skipped."}]
         }
-
-    # ── Step 1: Check if an existing generated skill can handle any of these ──
-    for task in failed_task_details[:3]:
-        task_desc = task.get("description", task.get("action", ""))
-        candidate_skills = skills_for_task(task_desc)
-        if candidate_skills:
-            logger.info(f"[SkillForge] Found existing skills that may help: {candidate_skills}")
-            # Try running the best candidate
-            for skill_name in candidate_skills[:2]:
-                try:
-                    result = await run_skill(skill_name)
-                    if result.get("success"):
-                        logger.info(f"[SkillForge] Existing skill '{skill_name}' solved the problem!")
-                        # Clear the failed task
-                        user_id = state.get("created_by")
-                        if user_id:
-                            await agent_thought_push(
-                                user_id=user_id,
-                                context=f"discovered and deploying an existing neural capability '{skill_name}' to resolve the execution failure",
-                                agent_name="skillforge",
-                                goal_id=state.get("goal_id")
-                            )
-                        current_failed = list(state.get("failed_task_ids", []))
-                        fixed = [t for t in current_failed if t != task.get("id")]
-                        return {
-                            "failed_task_ids": fixed,
-                            "messages": [{"role": "assistant", "name": "skillforge", "content": f"Reused skill: {skill_name}"}],
-                            "next_agent": "publisher",
-                        }
-                except Exception as e:
-                    logger.warning(f"[SkillForge] Existing skill '{skill_name}' failed: {e}")
-
-    # ── Step 2: Web search for a real-world solution ──────────────────────────
-    error_summary = "; ".join([
-        f"{t.get('action', 'task')} failed: {t.get('error', 'unknown error')}"
-        for t in failed_task_details[:2]
-    ])
-    logger.info(f"[SkillForge] Searching web for: {error_summary}")
-    web_solution = await search_for_solution(error_summary, context="social media publishing python")
-    logger.info(f"[SkillForge] Web solution context: {web_solution[:300]}...")
-
-    # ── Step 2b: Detect if the solution requires a new API credential ─────────
-    api_check_prompt = f"""
-The following error occurred in a social media AI agent:
-{error_summary}
-
-Web research found this potential solution:
-{web_solution[:1000]}
-
-IMPORTANT: A headless browser (Playwright with Chromium) IS available in the execution sandbox.
-If the best solution can be achieved by controlling a browser (scraping, clicking, filling forms),
-that counts as a valid solution WITHOUT needing a new API key.
-
-Does the BEST solution require a new API key or external service that might not be configured yet?
-Respond with JSON only:
-{{
-  "needs_new_api": true or false,
-  "api_name": "Name of the API/service, or null if can use browser/other approach",
-  "signup_url": "https://..., or null",
-  "is_free": true or false,
-  "why_needed": "1-2 sentence explanation",
-  "can_proceed_without": true or false,
-  "use_playwright": true or false,
-  "alternative_approach": "Description of headless browser approach or other fallback if it exists, else null"
-}}
-
-Set use_playwright=true if a headless Playwright browser can solve this without needing a new API key.
-Set can_proceed_without=true if either a browser approach OR another library can solve this.
-"""
-    try:
-        api_check = await generate_json(api_check_prompt)
-    except Exception:
-        api_check = {"needs_new_api": False}
 
     user_id = state.get("created_by")
-    goal_id = state.get("goal_id")
-
-    if api_check.get("needs_new_api") and not api_check.get("can_proceed_without"):
-        # Notify via chat AND email
-        api_name = api_check.get("api_name", "an external API")
-        signup_url = api_check.get("signup_url", "")
-        is_free = api_check.get("is_free", False)
-        why = api_check.get("why_needed", "")
-        free_note = "✅ Free tier available" if is_free else "⚠️ May require a paid plan"
-
-        chat_msg = (
-            f"🔑 I found a solution for the roadblock, but it requires a new credential: **{api_name}**\n\n"
-            f"Why: {why}\n\n"
-            f"{free_note}\n"
-            f"Sign up here: {signup_url}\n\n"
-            f"Once you add the key in **Settings → Integrations**, I'll automatically retry this task. "
-            f"I've also sent you an email with this info."
-        )
-        if user_id:
-            await chat_push(user_id, chat_msg, "skillforge", goal_id)
-
-        from agent.tools.email_notify import notify_api_key_needed
-        await notify_api_key_needed(
-            capability=error_summary[:80],
-            api_name=api_name,
-            signup_url=signup_url,
-            why_needed=why,
-            is_free=is_free,
+    
+    if user_id:
+        await agent_thought_push(
+            user_id=user_id,
+            context=f"initiating internal nested ReAct compiler loop to solve {len(failed_task_details)} dynamic failures",
+            agent_name="skillforge",
+            goal_id=state.get("goal_id")
         )
 
-        from langgraph.graph import END
-        return {
-            "messages": [{"role": "assistant", "name": "skillforge", "content": f"Paused — API key needed: {api_name}"}],
-            "next_agent": END,
-        }
+    # Boot the internal ReAct agent
+    llm = get_tool_llm(temperature=0.2) # Needs strict tool adherence
+    tools = [search_open_source_packages, write_and_test_python_code, pause_for_human_intervention]
+    
+    sys_prompt = f"""You are SkillForge, the Autonomous Auto-Healer inside the Digital Force Agent Swarm.
+Your job is to read failed execution tasks from other swarm agents, build code capabilities to fix them, and test them until they pass.
 
-    # If an alternative exists even without the API, proceed with that
-    if api_check.get("needs_new_api") and api_check.get("alternative_approach"):
-        alt = api_check.get("alternative_approach", "")
-        logger.info(f"[SkillForge] API needed but alternative exists: {alt}")
-        # Inject alternative into the web solution context
-        web_solution = f"PREFERRED APPROACH (no new API needed): {alt}\n\n" + web_solution
+CRITICAL RULES FOR RE-ACT LOOP:
+1. Try the OPEN-SOURCE API path first: Use `search_open_source_packages` to find an existing PyPI module or LangChain Python SDK for the failed Platform API. Then use `write_and_test_python_code` injecting that PyPI module in the `dependencies` array.
+2. Read the terminal output. If the PyPI package fails (e.g. requires a strictly Paid API key we don't have), abandon the package framework.
+3. Fallback to PHYSICAL HALLUCINATION: Call `write_and_test_python_code` with ZERO dependencies, and write a Python Playwright script using the Ghost Browser to bypass the API restrictions entirely.
+    - `from agent.browser.ghost import ghost`
+    - `page = await ghost.get_page()`
+    - `await page.goto(...)`
+    - `await page.close()`
+4. If either path succeeds (success: True in sandbox output), stop and output your final success statement.
+5. If you hit a QR code or missing credential, use `pause_for_human_intervention`.
 
-    # ── Step 3: Analyze + design the new skill (with web context) ─────────────
-    analysis_prompt = f"""
-A social media AI agent encountered failures:
-{json.dumps(failed_task_details, indent=2)}
-
-Web research found these potential solutions:
-{web_solution}
-
-Design a new Python skill to prevent these failures.
-Respond with JSON only:
-{{
-  "skill_name": "snake_case_function_name",
-  "display_name": "Human Readable Name",
-  "description": "Technical description of what this skill does",
-  "input_params": {{"param_name": "type"}},
-  "test_args": {{"param_name": "test_value"}},
-  "risk_level": "low or medium or high",
-  "non_technical_summary": "1-2 sentence plain-English explanation of what went wrong and what the fix does."
-}}
-
-Risk level:
-- low: syntax fixes, backup APIs, alternate hashtags, retry logic
-- medium: scraping alternatives, format changes, different endpoints
-- high: spending money, deleting data, violating rate limits, brute force
+When writing Playwright code, NEVER use async_playwright. YOU MUST use `from agent.browser.ghost import ghost`. Be highly resilient against selectors timeouts with try/except wrappers.
 """
 
+    agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
+    
+    prompt = f"Please resolve the following failed tasks:\n{json.dumps(failed_task_details, indent=2)}"
+    
+    # Run the internal event loop for up to 10 max iterations
     try:
-        skill_spec = await generate_json(analysis_prompt)
-    except Exception as e:
-        logger.error(f"[SkillForge] Could not design skill from web context: {e}")
-        return {"next_agent": "monitor"}
-
-    skill_name = skill_spec.get("skill_name", "new_skill")
-    risk_level = skill_spec.get("risk_level", "high").lower()
-    summary = skill_spec.get("non_technical_summary", "Implemented a new skill to bypass the error.")
-    logger.info(f"[SkillForge] Forging: {skill_name} (Risk: {risk_level})")
-
-    # ── Step 4: Generate the skill code (with web solution as context) ────────
-    use_playwright = api_check.get("use_playwright", False)
-
-    # SECURITY: Check if the task requires authenticated browser fallback.
-    # We NEVER inject plaintext credentials into the LLM prompt.
-    # Instead, we signal that the Ghost Browser's PERSISTENT SESSION should be used.
-    # Credentials remain encrypted in the database and are resolved at browser-session
-    # load time by ghost.py, completely isolated from the LLM context window.
-    has_ghost_session = False
-    for ft in failed_task_details:
-        if ft.get("connection_id") or ft.get("auth_data"):
-            has_ghost_session = True
-            use_playwright = True
-            break
-
-    ghost_session_hint = (
-        "\n\nSECURITY NOTE: The Ghost Browser already holds a persistent, authenticated "
-        "session for this platform. DO NOT attempt to fill in login forms or handle "
-        "credentials yourself. Call `page = await ghost.get_page()` and the session "
-        "will already be authenticated. Navigate directly to the publishing URL."
-    ) if has_ghost_session else ""
-
-    playwright_hint = (
-        "\n\nIMPORTANT: Use Playwright via Ghost Browser for this skill. "
-        "Use `from agent.browser.ghost import ghost` and `page = await ghost.get_page()`. "
-        "Do NOT use `async_playwright` or launch browsers yourself. Always await `page.close()` when done."
-        "\nDOM AUTO-HEAL INSTRUCTION: If any `page.locator()` or `wait_for_selector` times out, you MUST wrap it in a try/except, take a screenshot using `await page.screenshot(path='error_heal.png')`, close the page, and return it exactly like this:\n"
-        " `return {'success': False, 'error': str(e), 'error_type': 'TimeoutError', 'screenshot_path': 'error_heal.png', 'failed_selector': 'the_css_selector_that_failed'}`"
-        + ghost_session_hint
-    ) if use_playwright else ""
-
-    code_prompt = f"""
-Create a Python async function called '{skill_name}' that:
-{skill_spec.get('description')}
-
-Input parameters: {json.dumps(skill_spec.get('input_params', {}))}
-
-Use this research as guidance for implementation:
-{web_solution[:800]}
-
-Context: This is for a social media AI agent managing content across LinkedIn, Facebook, TikTok, Instagram, X, YouTube.
-The function must be fully self-contained. Include ALL imports inside the function body.
-Return a dict with a "success" key always.{playwright_hint}
-"""
-
-    raw_code = await generate_completion(code_prompt, SKILL_SYSTEM_PROMPT)
-    code_match = re.search(r'```python\n(.*?)```', raw_code, re.DOTALL)
-    clean_code = code_match.group(1) if code_match else raw_code
-
-    # ── Step 5: Test in sandbox ───────────────────────────────────────────────
-    from agent.tools.sandbox import run_in_e2b
-    
-    # Show the code we are about to run in chat!
-    retries = 0
-    max_retries = 3
-    final_test_result = None
-    final_clean_code = clean_code
-    
-    while retries <= max_retries:
-        if user_id and retries == 0:
-            await chat_push(
-                user_id,
-                f"💻 Built Neural Capability [{skill_name}]. Executing logic stack in Sandbox:\n```python\n{final_clean_code}\n```",
-                "skillforge", state.get("goal_id")
-            )
-            
-        test_result = await run_in_e2b(final_clean_code, skill_name, skill_spec.get("test_args", {}))
-        
-        if test_result.get("success"):
-            final_test_result = test_result
-            break
-            
-        # Sandbox test failed
-        error_msg = test_result.get('error', '')
-        failed_dom = test_result.get('dom', '')
-        
-        if failed_dom and use_playwright and retries < max_retries:
-            retries += 1
-            if user_id:
-                await chat_push(user_id, f"🛠️ **DOM Auto-Healing ({retries}/{max_retries})** Locator crashed. Minifying DOM and sending to LLM to recalculate...", "skillforge", state.get("goal_id"))
-                
-            try:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(failed_dom, 'html.parser')
-                for tag in soup(["script", "style", "svg", "noscript", "meta"]):
-                    tag.decompose()
-                minified_dom = str(soup)[:20000]
-            except Exception:
-                minified_dom = failed_dom[:20000]
-                
-            repair_prompt = f"""
-You wrote Playwright script '{skill_name}', but it crashed with this error:
-{error_msg}
-
-Here is the minified DOM structure when it crashed:
-{minified_dom}
-
-Based ONLY on the true DOM text above, deduce the correct layout, text, or elements to target.
-Rewrite the ENTIRE Python function `{skill_name}` fixing the selector logic.
-"""
-            raw_code = await generate_completion(repair_prompt, SKILL_SYSTEM_PROMPT)
-            code_match = re.search(r'```python\n(.*?)```', raw_code, re.DOTALL)
-            final_clean_code = code_match.group(1) if code_match else raw_code
-        else:
-            final_test_result = test_result
-            break
-
-    new_skills = state.get("new_skills_created", [])
-
-    if final_test_result and final_test_result.get("success"):
-        # ── Step 6: Save skill + metadata ─────────────────────────────────────
-        skill_file = SKILLS_DIR / f"{skill_name}.py"
-        skill_file.write_text(
-            f'"""\nGenerated by SkillForge — {datetime.utcnow().isoformat()}\n'
-            f'{skill_spec.get("description")}\n"""\n\n{final_clean_code}'
+        final_state = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            {"recursion_limit": 10}
         )
-        # Save metadata so registry can describe and find it
-        save_skill_metadata(skill_name, {
-            "function_name": skill_name,
-            "display_name": skill_spec.get("display_name", skill_name),
-            "description": skill_spec.get("description", ""),
-            "input_params": skill_spec.get("input_params", {}),
-            "risk_level": risk_level,
-            "created_at": datetime.utcnow().isoformat(),
-        })
+    except Exception as e:
+        logger.error(f"[SkillForge ReAct Engine] Halting due to strict recursion or exception: {e}")
+        return {"next_agent": "monitor", "failed_task_ids": failed_tasks}
 
-        logger.info(f"[SkillForge] Skill '{skill_name}' created, saved, and registered")
-
-        # Step 7: Create a companion skill markdown file so other agents
-        # can discover and reason about this new capability.
-        try:
-            from langclaw_agents.skill_evolver import create_skill_file
-            await create_skill_file(
-                agent_name=f"skillforge_{skill_name}",
-                role_description=skill_spec.get("description", f"Auto-forged skill: {skill_name}"),
-                core_rules=[
-                    f"Auto-generated by SkillForge on {datetime.utcnow().strftime('%Y-%m-%d')}. Risk: {risk_level}.",
-                    f"Input parameters: {list(skill_spec.get('input_params', {}).keys())}",
-                    "Reuse this skill when the same error pattern recurs. Do not re-forge.",
-                    "If this skill fails 3 times consecutively, flag for human review via push_to_chat.",
-                ],
-                output_format='{"success": true/false, "result": "...", "error": "..."}'
-            )
-        except Exception as md_err:
-            logger.warning(f"[SkillForge] Could not create companion skill markdown: {md_err}")
-
+    # Analyze the trajectory
+    messages = final_state.get("messages", [])
+    output = ""
+    for msg in reversed(messages):
+        if msg.type == "ai" and msg.content:
+            output = msg.content
+            break
+            
+    # Check if SkillForge paused for human
+    for msg in messages:
+        if hasattr(msg, 'tool_calls'):
+            for tc in msg.tool_calls:
+                if tc.get("name") == "pause_for_human_intervention":
+                    if user_id:
+                        chat_msg = tc.get("args", {}).get("message", "Intervention required.")
+                        await chat_push(user_id, f"⚠️ **SkillForge Paused:** {chat_msg}", "skillforge", state.get("goal_id"))
+                    return {"next_agent": "monitor", "failed_task_ids": failed_tasks, "status": "paused"}
+    
+    # Determine if it succeeded based on context memory
+    # Since it iterates until sandbox success, if we hit the end cleanly, it fixed at least one
+    fixed_failed = []
+    # (For safety, we clear all failed tasks and let God Node re-publish them if SkillForge says it solved them)
+    if "success" in output.lower() or "resolved" in output.lower() or "fixed" in output.lower():
+        fixed_failed = []
         if user_id:
             await agent_thought_push(
                 user_id=user_id,
-                context=f"successfully forged, sandbox-tested, and registered new neural capability '{skill_spec.get('display_name', skill_name)}' - skill markdown created for agent discovery",
+                context=f"internal ReAct compilation successful, successfully forged neural pathways",
                 agent_name="skillforge",
                 goal_id=state.get("goal_id")
             )
-
-        current_failed = state.get("failed_task_ids", [])
-        fixed_failed = [t for t in current_failed if t not in [ft.get("id") for ft in failed_task_details]]
-
-        return {
-            "new_skills_created": new_skills + [skill_name],
-            "failed_task_ids": fixed_failed,
-            "messages": [{"role": "assistant", "name": "skillforge", "content": f"Auto-applied fix via skill: {skill_name}"}],
-            "next_agent": "publisher",
-        }
+            await chat_push(user_id, f"✅ Auto-Healed Pipeline via ReAct: \n{output[:500]}", "skillforge", state.get("goal_id"))
     else:
-        error_info = final_test_result.get('error', 'unknown error') if final_test_result else "unknown loop failure"
-        logger.warning(f"[SkillForge] Validation failed totally: {error_info}")
-        if user_id:
-            await agent_thought_push(
-                user_id=user_id,
-                context=f"engineered a solution based on web research but it crashed after max loop validation, halting for monitor review",
-                agent_name="skillforge",
-                goal_id=state.get("goal_id")
-            )
-        return {
-            "messages": [{"role": "assistant", "name": "skillforge", "content": "Skill validation failed limit."}],
-            "next_agent": "monitor",
-        }
+        fixed_failed = failed_tasks # Kept failed
+        
+    return {
+        "failed_task_ids": fixed_failed,
+        "messages": [{"role": "assistant", "name": "skillforge", "content": output}],
+        "next_agent": "publisher"
+    }

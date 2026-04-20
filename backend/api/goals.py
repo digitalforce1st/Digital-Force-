@@ -79,7 +79,7 @@ async def run_planning_agent(goal_id: str, goal_description: str, initial_state:
 
                 # Load plan for email notification
                 plan = json.loads(goal.plan or "{}") if goal.plan else {}
-                await _send_approval_notification(goal_id, goal.approval_token, plan)
+                await _send_approval_notification(goal_id, goal.approval_token, plan, goal.created_by)
 
         logger.info(f"[PlanningAgent] Complete for goal {goal_id}")
 
@@ -92,7 +92,7 @@ async def run_planning_agent(goal_id: str, goal_description: str, initial_state:
                 await db.commit()
 
 
-async def _send_approval_notification(goal_id: str, token: str, plan: dict):
+async def _send_approval_notification(goal_id: str, token: str, plan: dict, user_id: str = ""):
     """Send email notification for plan approval."""
     try:
         from config import get_settings
@@ -127,12 +127,24 @@ async def _send_approval_notification(goal_id: str, token: str, plan: dict):
         </body></html>
         """
 
-        # Send to configured notification address, or fall back to the SMTP sender account
-        recipient = (
-            s.target_notification_emails.split(",")[0].strip()
-            if s.target_notification_emails
-            else s.smtp_username
-        )
+        # Send to configured global notification address, OR the specific user's email, OR fallback
+        recipient = None
+        if s.target_notification_emails:
+            recipient = s.target_notification_emails.split(",")[0].strip()
+        elif user_id:
+            try:
+                from database import async_session, User
+                from sqlalchemy import select
+                async with async_session() as session:
+                    result = await session.execute(select(User.email).where(User.id == user_id))
+                    user_email = result.scalar_one_or_none()
+                    if user_email:
+                        recipient = user_email
+            except Exception as e:
+                logger.error(f"[Notify] Failed to fetch user email: {e}")
+        
+        if not recipient:
+            recipient = s.smtp_username
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"[Digital Force] Plan Ready: {campaign_name} ({task_count} tasks)"
@@ -141,11 +153,21 @@ async def _send_approval_notification(goal_id: str, token: str, plan: dict):
         msg.attach(MIMEText(body, "html"))
 
         def _send():
-            with smtplib.SMTP(s.smtp_host, s.smtp_port) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(s.smtp_username, s.smtp_password.replace(" ", ""))
-                server.sendmail(s.smtp_from_email, recipient, msg.as_string())
+            import smtplib
+            try:
+                with smtplib.SMTP(s.smtp_host, int(s.smtp_port)) as server:
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                    server.login(s.smtp_username, s.smtp_password.replace(" ", ""))
+                    # Strip any potential markdown bolding asterisks to satisfy UX constraints
+                    clean_body = body.replace("**", "")
+                    msg.replace_header("Subject", msg["Subject"].replace("**", ""))
+                    msg.set_payload(clean_body, "utf-8")
+                    server.sendmail(s.smtp_from_email, recipient, msg.as_string())
+            except Exception as inner_e:
+                logger.error(f"[Notify] SMTP internal error: {inner_e}")
+                raise inner_e
 
         import asyncio
         await asyncio.to_thread(_send)

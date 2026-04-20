@@ -360,144 +360,43 @@ async def _process_user_thought(cfg, now: datetime):
     await _check_brief_schedule(user_id, cfg, now, active_goals)
 
 
-# ── FIX 2: Real web news fetcher ──────────────────────────────────────────────
-
-async def _fetch_industry_news(industry: str) -> str:
-    """
-    Fetch live industry news from Google News RSS so research briefs are
-    grounded in real current events rather than LLM hallucinations.
-
-    Uses the existing RAG URL parser (parse_url) — no extra dependencies.
-    Returns a trimmed text blob for the LLM prompt, or "" on any failure
-    so the caller degrades gracefully without crashing.
-    """
-    import urllib.parse
-    from rag.pipeline import parse_url
-
-    query = urllib.parse.quote_plus(industry)
-    rss_url = (
-        f"https://news.google.com/rss/search"
-        f"?q={query}&hl=en-US&gl=US&ceid=US:en"
-    )
-
-    try:
-        raw = await parse_url(rss_url)
-        if raw and len(raw) > 100:
-            # Trim to a sensible context-window slice
-            return raw[:3000]
-        logger.warning(f"[Monologue] Live news returned too little content for '{industry}'")
-    except Exception as e:
-        logger.warning(f"[Monologue] Live news fetch failed for '{industry}': {e}")
-
-    return ""  # Graceful degradation — LLM still works without live data
-
-
 async def _run_background_thought(user_id: str, cfg, now: datetime):
     """
     The 'subconscious' background researcher.
-
-    FIX 2: Fetches REAL live industry news before calling the LLM so
-    research briefs are grounded in actual events, not hallucinations. The
-    old prompt claimed "live web access" but called a plain Groq completion
-    with zero actual web data — that is now fixed.
-
-    Generates a research brief, scores its relevance (0-100), and only
-    pushes it to the user's chat if it exceeds RELEVANCE_THRESHOLD.
-    Below-threshold insights are stored silently in Qdrant episodic memory.
+    Delegates completely to the LangClaw Subconscious Hub via the orchestrator.
     """
-    from agent.llm import generate_json
-    from agent.chat_push import chat_push
-    from database import async_session, Goal
+    from langclaw_agents.orchestrator_app import dispatch_subconscious
+    from database import async_session, Goal, ChatMessage
     from sqlalchemy import select, desc
 
-    logger.info(f"[Monologue] Running background thought for user {user_id[:8]}...")
-
-    async with async_session() as session:
-        goals_result = await session.execute(
-            select(Goal).where(Goal.created_by == user_id)
-            .order_by(desc(Goal.created_at)).limit(5)
-        )
-        past_goals = goals_result.scalars().all()
-
-    past_campaigns_text = "\n".join([
-        f"- {g.title} ({g.status})" for g in past_goals
-    ]) or "No past campaigns."
-
-    industry = cfg.industry or "technology and business"
-
-    # FIX 2: Pull real live news first to ground the LLM
-    live_news = await _fetch_industry_news(industry)
-    news_section = (
-        f"\nLIVE NEWS CONTEXT (treat this as your primary source of truth):\n{live_news}\n"
-        if live_news
-        else "\n(No live news available — base insights on established industry knowledge only.)\n"
-    )
-
-    research_prompt = f"""You are a proactive marketing research analyst.
-Industry: {industry}
-Brand voice: {cfg.brand_voice or 'Not specified'}
-Past campaigns: {past_campaigns_text}
-Date: {now.strftime('%A, %B %d %Y')}
-{news_section}
-Based on the live news context above, identify 2-3 specific, concrete trending opportunities in {industry}.
-Then self-score: how urgent and relevant is this insight to this specific business?
-Respond with JSON only:
-{{
-  "research_brief": "Full insight brief grounded in the news above (max 200 words)",
-  "headline": "One-line summary",
-  "relevance_score": 85,
-  "relevance_reason": "Why this is urgent/timely based on the news provided"
-}}"""
+    logger.info(f"[Monologue] Dispatching background thought node for user {user_id[:8]}...")
 
     try:
-        result = await generate_json(research_prompt, "You are a world-class marketing analyst.")
-        brief = result.get("research_brief", "")
-        score = int(result.get("relevance_score", 0))
-        headline = result.get("headline", "Proactive Research Brief")
-
-        if score >= RELEVANCE_THRESHOLD:
-            # This thought is important — interrupt the user organically
-            logger.info(f"[Monologue] High-relevance thought ({score}/100) — pushing to chat for {user_id[:8]}")
-            await chat_push(
-                user_id,
-                f"💡 **{headline}** _(Relevance: {score}/100)_\n\n{brief}\n\n"
-                f"_Reply 'launch [idea]' to act on this, or I'll keep it queued._",
-                "researcher",
+        async with async_session() as session:
+            # 1. Fetch recent campaigns
+            goals_result = await session.execute(
+                select(Goal).where(Goal.created_by == user_id)
+                .order_by(desc(Goal.created_at)).limit(5)
             )
-        else:
-            # Low-relevance — silently vectorize into episodic memory for future use
-            logger.info(f"[Monologue] Low-relevance thought ({score}/100) — vectorizing silently")
-            await _store_silent_thought(user_id, brief, score, now)
+            past_goals = goals_result.scalars().all()
+            
+            # 2. Fetch recent active chat history
+            chat_result = await session.execute(
+                select(ChatMessage).where(
+                    ChatMessage.goal_id == None, # General chat, not nested
+                ).order_by(desc(ChatMessage.created_at)).limit(15)
+            )
+            recent_chats = chat_result.scalars().all()
+            recent_chats.reverse()
+
+        recent_campaigns = {g.id: g.title for g in past_goals}
+        chat_dicts = [{"role": c.role, "content": c.content} for c in recent_chats]
+
+        # 3. Fire the LangClaw Node!
+        await dispatch_subconscious(user_id, chat_dicts, recent_campaigns)
 
     except Exception as e:
-        logger.error(f"[Monologue] Background thought failed for {user_id[:8]}: {e}")
-
-
-async def _store_silent_thought(user_id: str, thought_text: str, score: int, now: datetime):
-    """
-    Silently embed a below-threshold thought into Qdrant episodic memory.
-
-    FIX 5: The original code called rag.pipeline.ingest_text() which does not
-    exist in this codebase. This function now calls rag.retriever.store()
-    directly — the same low-level function that the RAG pipeline itself uses
-    after chunking. The agent 'remembers' the thought without bothering the user.
-    """
-    try:
-        from rag.retriever import store, ensure_collections
-        await ensure_collections()
-        await store(
-            f"[Background Thought - {now.strftime('%Y-%m-%d')}] Score:{score}/100\n{thought_text}",
-            metadata={
-                "user_id": user_id,
-                "category": "episodic_memory",
-                "relevance_score": score,
-                "timestamp": now.isoformat(),
-                "source_type": "internal_thought",
-            },
-            collection="knowledge",
-        )
-    except Exception as e:
-        logger.warning(f"[Monologue] Silent thought storage failed: {e}")
+        logger.error(f"[Monologue] Background thought dispatch failed for {user_id[:8]}: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

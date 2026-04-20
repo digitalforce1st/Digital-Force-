@@ -74,12 +74,25 @@ async def send_agent_email(
 
 
 def _smtp_send(msg: MIMEMultipart, recipient: str, email_from: str):
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
-        server.ehlo()
-        server.starttls()
-        # Strip spaces from Gmail App Passwords (e.g. 'xxxx xxxx xxxx xxxx')
-        server.login(settings.smtp_username, settings.smtp_password.replace(" ", ""))
-        server.sendmail(email_from, recipient, msg.as_string())
+    import smtplib
+    try:
+        with smtplib.SMTP(settings.smtp_host, int(settings.smtp_port)) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(settings.smtp_username, settings.smtp_password.replace(" ", ""))
+            
+            # Remove any asterisks from the payload to prevent raw markdown rendering
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    part.set_payload(part.get_payload().replace("**", "").replace("*", ""))
+                elif part.get_content_type() == "text/html":
+                    part.set_payload(part.get_payload().replace("**", "").replace("*", ""))
+            
+            server.sendmail(email_from, recipient, msg.as_string())
+    except Exception as e:
+        logger.error(f"[Email] SMTP internal error: {e}")
+        raise e
 
 
 async def _generate_neural_email(context: str, user_id: str, token: Optional[str] = None) -> dict:

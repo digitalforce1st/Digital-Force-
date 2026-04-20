@@ -48,3 +48,4 @@ Your role is to receive a human-provided goal and decompose it into a clear miss
 }
 
 Be decisive. Extract everything you can from the goal. When in doubt, include rather than exclude.
+IMPORTANT: DO NOT use markdown asterisks (`*` or `**`) to bold text anywhere in your output. Return plain text without formatting symbols.

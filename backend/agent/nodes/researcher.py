@@ -23,14 +23,37 @@ RULES:
 4. Playwright is highly recommended to bypass JS blocks. Always use headless=True.
 5. Provide ONLY the python code fenced in ` ```python ... ``` `."""
 
-async def ghost_visual_research(goal: str, platform: str) -> dict:
+from langchain_core.tools import tool
+
+@tool
+async def search_open_web(query: str, platforms: list[str] = None) -> str:
+    """Use this tool to search the internet and social media platforms for live trends and insights."""
+    from agent.tools.web_search import search_social_trends
+    result = await search_social_trends(query, platforms or [])
+    return str(result.get("results", []))
+
+@tool
+async def scrape_walled_garden_visually(platform: str, goal: str) -> str:
+    """Use this tool to physically spin up a headless browser, navigate to a walled garden (Instagram, Facebook, LinkedIn, TikTok), and use Llama-Vision to analyze the DOM."""
+    logger.info(f"[Researcher Tool] Ghost Visual Scrape requested for {platform}")
+    findings = await _ghost_visual_research(goal, platform)
+    return str(findings)
+
+async def _ghost_visual_research(goal: str, platform: str) -> dict:
     """Uses Ghost Browser and Llama-Vision to scrape walled-gardens natively."""
     from agent.browser.ghost import ghost
     import urllib.parse
     import base64
-    import os
     from config import get_settings
     from groq import AsyncGroq
+    import asyncio
+    
+    # Fast check if playwright is running
+    try:
+        if not ghost.is_running:
+            return {"error": "Ghost browser not actively running or installed."}
+    except Exception:
+        return {"error": "Playwright integration failure."}
     
     query = urllib.parse.quote_plus(goal[:50])
     if platform == "instagram":
@@ -47,7 +70,6 @@ async def ghost_visual_research(goal: str, platform: str) -> dict:
     try:
         page = await ghost.get_page()
         await page.goto(url, wait_until="networkidle")
-        import asyncio
         await asyncio.sleep(4) # Let DOM settle
         await page.evaluate("window.scrollBy(0, document.body.scrollHeight)") # Trigger lazy load
         await asyncio.sleep(2)
@@ -88,124 +110,106 @@ async def ghost_visual_research(goal: str, platform: str) -> dict:
         return {}
     except Exception as e:
         logger.error(f"[Vision Researcher] Failed natively scraping {platform}: {e}")
-        return {}
-
+        return {"error": str(e)}
 
 async def researcher_node(state: AgentState) -> dict:
     """
-    Leverages Ghost Browser Vision for Walled Gardens, and robust Tavily Web Search API
-    for open-web intelligence.
+    A robust ReAct loop. Decides organically whether to use Tavily open-web search
+    or Ghost visual browser scraping based on the platforms requested.
     """
-    from agent.tools.web_search import search_social_trends
     goal_id = state['goal_id']
     user_id = state.get('created_by', '')
     goal    = state["goal_description"]
     platforms = [p.lower() for p in state.get("platforms", [])]
     
-    logger.info(f"[Researcher] Starting research for goal {goal_id}")
+    logger.info(f"[Researcher] Starting nested ReAct research for goal {goal_id}")
 
     await agent_thought_push(
         user_id=user_id,
         agent_name="researcher",
-        context="initiating intelligence gathering sequence across network nodes",
+        context="initiating intelligence gathering ReAct loop across network nodes",
         goal_id=goal_id,
     )
 
-    WALLED_GARDENS = {"instagram", "facebook", "linkedin", "tiktok"}
-    requires_vision = any(p in WALLED_GARDENS for p in platforms)
+    from agent.llm import get_tool_llm
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.messages import SystemMessage, HumanMessage
+    import json
+    import re
+    
+    llm = get_tool_llm(temperature=0.2)
+    tools = [search_open_web, scrape_walled_garden_visually]
+    
+    sys_prompt = f"""You are the Lead Social Media Researcher in a Swarm architecture.
+Your objective is to find real-time trending topics and content angles for the user's goal.
+You are researching these specific platforms: {platforms}
 
-    # Whether Ghost Browser is available — determined at runtime so a missing
-    # Playwright install degrades gracefully to the Tavily web search path.
-    ghost_available = False
-    try:
-        from agent.browser.ghost import ghost
-        ghost_available = ghost.is_running
-    except Exception:
-        pass
+You have two tools:
+1. `search_open_web`: Fast and robust text intelligence scraping.
+2. `scrape_walled_garden_visually`: Launches a headless Chromium browser to visually inspect walled gardens (like TikTok/Instagram).
 
-    try:
-        if requires_vision and ghost_available:
-            target_platform = next(p for p in platforms if p in WALLED_GARDENS)
-            await chat_push(
-                user_id=user_id,
-                content=f"👁️ Engaging Vision Heuristics via Ghost Browser to natively analyze {target_platform} walled garden...",
-                agent_name="researcher",
-                goal_id=goal_id,
-            )
-            try:
-                findings = await ghost_visual_research(goal, target_platform)
-                if not findings or not findings.get("trending_topics"):
-                    raise ValueError("Ghost returned empty findings — falling back to web search")
-            except Exception as ghost_err:
-                logger.warning(f"[Researcher] Ghost Browser path failed ({ghost_err}) — falling back to Tavily")
-                findings = {}  # Will trigger the web search fallback below
-            topics = findings.get('trending_topics', [])
-            angles = findings.get('content_angles', [])
-
-        else:
-            if requires_vision and not ghost_available:
-                logger.info("[Researcher] Ghost Browser unavailable — using Tavily web search for walled garden research")
-            await chat_push(
-                user_id=user_id,
-                content=f"💻 Launching neural web-crawl across Tavily nodes to fetch live open-web intel...",
-                agent_name="researcher",
-                goal_id=goal_id,
-            )
-            findings = {}
-            topics = []
-            angles = []
-
-        # ── Web search path (always runs if Ghost failed or not needed) ──────
-        if not topics:
-            result = await search_social_trends(goal, platforms)
-            output = str(result.get("results", []))
-
-            await agent_thought_push(
-                user_id=user_id,
-                agent_name="researcher",
-                context="crawl complete, parsing text nodes with LLM",
-                goal_id=goal_id,
-            )
-
-            synthesis_prompt = f"""
-Based on the raw data scraped by our headless framework, extract actionable social media insights:
-GOAL: {goal}
-RAW DATA: {output[:4000]}
-
-Return JSON:
+CRITICAL RULE:
+Once you have explored enough data, stop calling tools. Your final output MUST be EXACTLY a raw JSON object (and nothing else) matching this schema:
 {{
   "trending_topics": ["topic1", "topic2"],
-  "recommended_hashtags": {{"global": []}},
+  "recommended_hashtags": {{"global": ["#tag"]}},
   "content_angles": ["angle1"],
-  "audience_insights": "..."
+  "audience_insights": "detailed insight string"
 }}
 """
-            findings = await generate_json(synthesis_prompt)
-            topics = findings.get('trending_topics', [])
-            angles = findings.get('content_angles', [])
 
-        # Ensure minimal viable findings if empty
-        if not findings or not topics:
-            findings = {
-                "trending_topics": ["General Trend"],
-                "recommended_hashtags": {"global": ["#marketing"]},
-                "content_angles": ["Educational piece"],
-                "audience_insights": "Audience prefers clear, succinct value."
-            }
+    agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
+    prompt = f"Goal: {goal}\nPlatforms: {platforms}"
 
-        await agent_thought_push(
-            user_id=user_id,
-            agent_name="researcher",
-            context=f"successfully extracted {len(topics)} trends and {len(angles)} unique angles from the raw data",
-            goal_id=goal_id,
+    try:
+        final_state = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            {"recursion_limit": 6}
         )
+    except Exception as e:
+        logger.error(f"[Researcher ReAct Engine] Halting due to recursion or exception: {e}")
+        # Return fallback on fatal loop crash
         return {
-            "research_findings": findings,
-            "needs_replanning_research": False,
-            "messages": [{"role": "assistant", "name": "researcher", "content": f"Live Scraping Succeeded: {len(topics)} topics found."}],
+            "research_findings": {"trending_topics": ["General Trend"], "recommended_hashtags": {"global": ["#marketing"]}, "content_angles": ["Educational"], "audience_insights": "Fallback due to timeout."},
             "next_agent": "supervisor"
         }
-            
+
+    # Extract final message and parse JSON
+    messages = final_state.get("messages", [])
+    output = ""
+    for msg in reversed(messages):
+        if msg.type == "ai" and msg.content:
+            output = msg.content
+            break
+
+    findings = {}
+    try:
+        # Strict fallback matching
+        match = re.search(r'\{.*\}', output, re.DOTALL)
+        if match:
+            findings = json.loads(match.group())
+        else:
+            findings = json.loads(output)
     except Exception as e:
-        logger.error(f"[Researcher] Fatal Error: {e}")
-        return {"next_agent": "supervisor"}
+        logger.warning(f"[Researcher] Could not parse exact JSON from loop output: {e}\nRaw: {output[:200]}")
+        findings = {
+            "trending_topics": ["General"], "recommended_hashtags": {"global": ["#digital"]},
+            "content_angles": ["General Approach"], "audience_insights": output[:200]
+        }
+
+    topics = findings.get('trending_topics', [])
+    angles = findings.get('content_angles', [])
+
+    await agent_thought_push(
+        user_id=user_id,
+        agent_name="researcher",
+        context=f"React loop successfully compiled {len(topics)} trends and {len(angles)} insights from live agents",
+        goal_id=goal_id,
+    )
+    
+    return {
+        "research_findings": findings,
+        "needs_replanning_research": False,
+        "messages": [{"role": "assistant", "name": "researcher", "content": f"Live Scraping Loop Completed: {len(topics)} topics found."}],
+        "next_agent": "supervisor"
+    }

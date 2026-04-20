@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp"])
 
 QR_PATH = Path(__file__).parent.parent / "media" / "qr_codes" / "whatsapp_qr.png"
+TIMEOUT_FLAG = Path(__file__).parent.parent / "media" / "qr_codes" / "whatsapp_timeout.flag"
 
 
 @router.get("/status")
@@ -44,6 +45,7 @@ async def whatsapp_status(user: dict = Depends(get_current_user)):
         "session_dir_exists": session_exists,
         "qr_available": qr_available,
         "qr_image_b64": qr_b64,
+        "timeout_detected": TIMEOUT_FLAG.exists(),
     }
     
     return JSONResponse(
@@ -70,6 +72,8 @@ async def request_whatsapp_qr(user: dict = Depends(get_current_user)):
             # Delete any stale QR image first
             if QR_PATH.exists():
                 QR_PATH.unlink()
+            if TIMEOUT_FLAG.exists():
+                TIMEOUT_FLAG.unlink()
 
             page = await ghost.get_page(account_id="whatsapp_automation")
             logger.info("[WhatsApp QR] Navigating to WhatsApp Web for QR capture...")
@@ -99,6 +103,8 @@ async def request_whatsapp_qr(user: dict = Depends(get_current_user)):
                     logger.info("[WhatsApp QR] Session is already authenticated!")
             except Exception as e:
                 logger.warning(f"[WhatsApp QR] Timeout waiting for page: {e}")
+                TIMEOUT_FLAG.parent.mkdir(parents=True, exist_ok=True)
+                TIMEOUT_FLAG.touch()
                 # Capture the state of the page so we can debug!
                 debug_path = QR_PATH.parent / "whatsapp_debug_screenshot.png"
                 await page.screenshot(path=str(debug_path))
@@ -147,5 +153,7 @@ async def clear_whatsapp_session(user: dict = Depends(get_current_user)):
     # Clear stale QR image
     if QR_PATH.exists():
         QR_PATH.unlink()
+    if TIMEOUT_FLAG.exists():
+        TIMEOUT_FLAG.unlink()
 
     return {"status": "cleared", "message": "WhatsApp session cleared. Request a fresh QR code to re-authenticate."}

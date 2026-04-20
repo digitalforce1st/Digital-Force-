@@ -46,9 +46,11 @@ async def generate_completion(
     from langchain_core.messages import SystemMessage, HumanMessage
     from langchain_groq import ChatGroq
     
+    no_asterisk_rule = "\n\nIMPORTANT: DO NOT use markdown asterisks (`*` or `**`) to bold text anywhere in your output. Return plain text without formatting symbols."
+    system_prompt = (system_prompt + no_asterisk_rule).strip()
+
     messages = []
-    if system_prompt:
-        messages.append(SystemMessage(content=system_prompt))
+    messages.append(SystemMessage(content=system_prompt))
     messages.append(HumanMessage(content=prompt))
     
     configs = _get_cascade_configs()
@@ -126,6 +128,10 @@ async def stream_chat_with_history(
     from groq import AsyncGroq
     configs = _get_cascade_configs()
     last_error = None
+
+    # Inject global no-asterisk formatting rule
+    no_asterisk_rule = "\n\nIMPORTANT: DO NOT use markdown asterisks (`*` or `**`) to bold text anywhere in your output. Return plain text without formatting symbols."
+    system = (system + no_asterisk_rule).strip()
 
     # Normalise roles: Groq only accepts "user" | "assistant" | "system"
     groq_messages = [{"role": "system", "content": system}]

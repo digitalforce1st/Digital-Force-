@@ -151,26 +151,127 @@ async def dispatch_content_director(goal_id: str, user_id: str, goal_description
         return {"status": "failed", "error": str(e)}
 
 
+async def dispatch_publisher(goal_id: str, user_id: str, tasks: list, completed_task_ids: list, failed_task_ids: list) -> dict:
+    """Kick off the publisher spoke to blast content to social graphs."""
+    try:
+        from agent.nodes.publisher import publisher_node
+        from agent.state import AgentState
+        slim_state: AgentState = {
+            "goal_id": goal_id, "goal_description": "",
+            "created_by": user_id, "platforms": [],
+            "messages": [], "research_findings": {},
+            "campaign_plan": {}, "tasks": tasks,
+            "completed_task_ids": completed_task_ids, "failed_task_ids": failed_task_ids,
+            "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
+            "human_feedback": None, "new_skills_created": [], "next_agent": None,
+            "target_agent": None, "risk_score": None, "error": None,
+            "iteration_count": 0, "asset_ids": [], "deadline": None,
+            "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
+            "current_task_id": None,
+        }
+        result = await publisher_node(slim_state)
+        return {
+            "status": "ok",
+            "completed_task_ids": result.get("completed_task_ids", []),
+            "failed_task_ids": result.get("failed_task_ids", []),
+            "tasks": result.get("tasks", tasks)
+        }
+    except Exception as e:
+        logger.error(f"[Orchestrator] Publisher dispatch failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
+async def dispatch_skillforge(goal_id: str, user_id: str, tasks: list, failed_task_ids: list, goal_description: str = "") -> dict:
+    """Kick off the Auto-Healer spoke to build fallbacks for failed tasks."""
+    try:
+        from agent.nodes.skillforge import skillforge_node
+        from agent.state import AgentState
+        slim_state: AgentState = {
+            "goal_id": goal_id, "goal_description": goal_description,
+            "created_by": user_id, "platforms": [],
+            "messages": [], "research_findings": {},
+            "campaign_plan": {}, "tasks": tasks,
+            "completed_task_ids": [], "failed_task_ids": failed_task_ids,
+            "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
+            "human_feedback": None, "new_skills_created": [], "next_agent": None,
+            "target_agent": None, "risk_score": None, "error": None,
+            "iteration_count": 0, "asset_ids": [], "deadline": None,
+            "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
+            "current_task_id": None,
+        }
+        result = await skillforge_node(slim_state)
+        return {
+            "status": "ok",
+            "failed_task_ids": result.get("failed_task_ids", failed_task_ids), # Return updated unresolved failures
+            "new_skills_created": result.get("new_skills_created", [])
+        }
+    except Exception as e:
+        logger.error(f"[Orchestrator] SkillForge dispatch failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
+async def _evaluate_state_and_decide(goal_desc: str, platforms: list, memory: str, research: dict, tasks: list, completed_ids: list, failed_ids: list, iteration: int) -> dict:
+    """The Global Supervisor ('God Node') ReAct prompt loop."""
+    from agent.llm import generate_json
+    # Filter only uncompleted tasks for context window sanity
+    pending_tasks = [t for t in tasks if t.get("id") not in completed_ids and t.get("id") not in failed_ids][:5]
+    
+    prompt = f"""
+    You are the Digital Force Hub Supervisor. You execute an autonomous multi-agent swarm.
+    Your mission: evaluate the current execution state and dispatch exactly ONE spoke agent.
+
+    Goal: {goal_desc}
+    Platforms: {platforms}
+    Hub Loop Iteration: {iteration}/15
+    
+    CURRENT STATE TRACKERS:
+    - Research Phase Finished: {bool(research)}
+    - Tasks Generated: {len(tasks)}
+    - Tasks Completed Successfully: {len(completed_ids)}
+    - Tasks Failed Critically: {len(failed_ids)} (Failed Task IDs: {failed_ids})
+
+    Pending Tasks Snippet ({len(pending_tasks)} shown):
+    {pending_tasks}
+    
+    AVAILABLE SPOKE AGENTS (Choose exactly one):
+    - "DISPATCH_RESEARCHER": Collects context. Use if Research Phase is False and goal requires strategy.
+    - "DISPATCH_STRATEGIST": Creates the campaign tasks. Use if Research is True but Tasks Generated is 0.
+    - "DISPATCH_CONTENT_DIRECTOR": Generates content payloads. Use if there are pending tasks with task_type="generate_content".
+    - "DISPATCH_PUBLISHER": Publishes content. Use if there are pending tasks with task_type="post_content".
+    - "DISPATCH_SKILLFORGE": The Auto-Healer & Authenticator. Use if there are Tasks Failed Critically. ALSO USE IMMEDIATELY if the goal is "SYSTEM_AUTH_PROVISION" to orchestrate headless login scripts.
+    - "COMPLETE": Use if Tasks Completed == Tasks Generated, OR if there is absolutely no path forward.
+    
+    Return JSON only:
+    {{
+        "reasoning": "Step-by-step logic explaining the state, what is missing, and what Spoke must be injected into the Execution Runtime next to achieve the user's ultimate goal.",
+        "action": "DISPATCH_RESEARCHER" | "DISPATCH_STRATEGIST" | "DISPATCH_CONTENT_DIRECTOR" | "DISPATCH_PUBLISHER" | "DISPATCH_SKILLFORGE" | "COMPLETE"
+    }}
+    """
+    return await generate_json(prompt, "You are the God Node, an omniscient supervisor overseeing autonomous execution.")
+
+
+
 # ── Main Orchestrator Entry Point ──────────────────────────────────────────────
 
 async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
     """
     Main entry point for the Langclaw Orchestrator Hub.
-    Reads goal from DB by ID. Dispatches spokes. Returns final status.
+    Executes a dynamic ReAct (Reasoning and Acting) LLM loop to evaluate
+    and dynamically route goal progression until fully complete or fatally stalled.
     """
-    from database import async_session, Goal, AgentTask
-    from sqlalchemy import select
+    from database import async_session, Goal
+    from agent.chat_push import agent_thought_push, chat_push
     import json
+    import uuid
 
-    logger.info(f"[Orchestrator] Hub activated for goal {goal_id} via {trigger_source}")
+    logger.info(f"[Orchestrator Hub] ReAct Loop activated for goal {goal_id} via {trigger_source}")
 
-    # ── Read goal from DB (not from a bloated state dict) ─────────────────────
+    # 1. Load context
     async with async_session() as session:
         goal = await session.get(Goal, goal_id)
         if not goal:
-            logger.error(f"[Orchestrator] Goal {goal_id} not found in database.")
             return {"status": "error", "error": "Goal not found"}
-
+        
         platforms = json.loads(goal.platforms or "[]")
         goal_description = goal.description
         user_id = goal.created_by or ""
@@ -178,81 +279,154 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
         success_metrics = json.loads(goal.success_metrics or "{}")
         constraints = json.loads(goal.constraints or "{}")
         asset_ids = json.loads(goal.assets or "[]")
+        
+        campaign_plan = json.loads(goal.plan or "{}")
+        tasks = campaign_plan.get("tasks", []) 
 
-    # ── Step 1: Retrieve Episodic Memory ──────────────────────────────────────
     memory = await retrieve_episodic_memory(goal_description, " ".join(platforms))
-    logger.info(f"[Orchestrator] Episodic memory loaded: {memory[:100]}...")
-
-    # ── Step 2: Research Phase ─────────────────────────────────────────────────
-    research_result = await dispatch_researcher(goal_id, user_id, goal_description, platforms)
-    research_findings = research_result.get("research_findings", {})
-
-    # ── Step 3: Strategy Phase ──────────────────────────────────────────────
-    strategy_result = await dispatch_strategist(
-        goal_id, user_id, goal_description, platforms, research_findings,
-        deadline, success_metrics, constraints, asset_ids
-    )
-    if strategy_result["status"] == "failed":
-        return {"status": "error", "error": strategy_result.get("error")}
-
-    campaign_plan = strategy_result.get("campaign_plan", {})
-    tasks = strategy_result.get("tasks", [])
-
-    # Assign IDs to any tasks missing them
-    import uuid as _uuid
+    research_findings = {} 
+    
+    completed_ids = []
+    failed_ids = [] 
     for t in tasks:
-        if not t.get("id"):
-            t["id"] = str(_uuid.uuid4())
-    campaign_plan["tasks"] = tasks
+        if t.get("status") == "completed":
+             completed_ids.append(t["id"])
+        elif t.get("error"):
+             failed_ids.append(t["id"])
 
-    # Persist plan + tasks to Postgres immediately
+    iteration = 0
+    max_iterations = 15
+    final_status = "error"
+
+    try:
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"[Orchestrator Hub] Loop {iteration}: God Node evaluating state...")
+            
+            try:
+                decision = await _evaluate_state_and_decide(
+                    goal_description, platforms, memory, research_findings, 
+                    tasks, completed_ids, failed_ids, iteration
+                )
+                action = decision.get("action", "COMPLETE")
+                reasoning = decision.get("reasoning", "No reasoning provided.")
+            except Exception as e:
+                action, reasoning = "PAUSE", f"God Node evaluation failed: {e}"
+                
+            logger.info(f"[Orchestrator Hub] Command => {action} (Reason: {reasoning})")
+            
+            # Announce the dynamic decision
+            await agent_thought_push(
+                user_id=user_id, 
+                context=f"Hub Supervisor executed Cognitive Loop {iteration} | Reasoning: {reasoning} | Invoking Component: {action}", 
+                agent_name="orchestrator", 
+                goal_id=goal_id
+            )
+
+            if action == "DISPATCH_RESEARCHER":
+                res = await dispatch_researcher(goal_id, user_id, goal_description, platforms)
+                if res["status"] == "ok":
+                    research_findings = res["research_findings"]
+
+            elif action == "DISPATCH_STRATEGIST":
+                res = await dispatch_strategist(goal_id, user_id, goal_description, platforms, research_findings, deadline, success_metrics, constraints, asset_ids)
+                if res["status"] == "ok":
+                    campaign_plan = res.get("campaign_plan", {})
+                    tasks = res.get("tasks", [])
+                    for t in tasks:
+                        if not t.get("id"):
+                            t["id"] = str(uuid.uuid4())
+
+            elif action == "DISPATCH_CONTENT_DIRECTOR":
+                content_tasks = [t for t in tasks if t.get("task_type") == "generate_content" and t.get("id") not in completed_ids and t.get("id") not in failed_ids]
+                
+                async def _gen_content(task):
+                    c_res = await dispatch_content_director(goal_id, user_id, goal_description, task.get("platform", ""), tasks, campaign_plan, research_findings, completed_ids, task.get("id"))
+                    if c_res["status"] == "ok":
+                        completed_ids.append(task.get("id"))
+                        for r in c_res.get("content_swarm_results", []):
+                            if r.get("task_id") == task.get("id"):
+                                task["result"] = r.get("result", {})
+                                task["task_type"] = "post_content" 
+                                task["error"] = None # Clear old errors
+                    else:
+                        failed_ids.append(task.get("id"))
+                        task["error"] = c_res.get("error")
+
+                await asyncio.gather(*[_gen_content(t) for t in content_tasks])
+
+            elif action == "DISPATCH_PUBLISHER":
+                res = await dispatch_publisher(goal_id, user_id, tasks, completed_ids, failed_ids)
+                if res["status"] == "ok":
+                    tasks = res.get("tasks", tasks)
+                    new_completed = res.get("completed_task_ids", [])
+                    new_failed = res.get("failed_task_ids", [])
+                    completed_ids = list(set(completed_ids + new_completed))
+                    failed_ids = list(set(failed_ids + new_failed))
+
+            elif action == "DISPATCH_SKILLFORGE":
+                res = await dispatch_skillforge(goal_id, user_id, tasks, failed_ids, goal_description)
+                if res.get("status") == "paused":
+                    # SkillForge requested a human (e.g. captcha/QR via chat)
+                    final_status = "paused"
+                    async with async_session() as session:
+                        g = await session.get(Goal, goal_id)
+                        if g:
+                            g.status = final_status
+                            await session.commit()
+                    break
+                elif res.get("status") == "ok":
+                    failed_ids = list(set(res.get("failed_task_ids", [])))
+
+            elif action == "COMPLETE":
+                final_status = "completed"
+                break
+                
+            elif action == "PAUSE":
+                final_status = "paused"
+                await chat_push(user_id, f"⚠️ Campaign Hub paused execution. Goal requires intervention.\nReason: {reasoning}", "orchestrator", goal_id)
+                break
+                
+            else:
+                logger.warning(f"[Orchestrator Hub] God Node hallucinated action {action}! Breaking loop.")
+                final_status = "completed_with_errors"
+                break
+
+            # Postgres Checkpoint: Save strict state boundaries safely every loop iteration
+            async with async_session() as session:
+                g = await session.get(Goal, goal_id)
+                if g:
+                    campaign_plan["tasks"] = tasks
+                    g.plan = json.dumps(campaign_plan)
+                    g.tasks_total = len(tasks)
+                    g.tasks_completed = len(completed_ids)
+                    if len(tasks) > 0:
+                        prog = (len(completed_ids) / len(tasks)) * 100
+                        g.progress_percent = min(prog, 99.9)  # Keep under 100 until fully COMPLETE status
+                    await session.commit()
+
+        if iteration >= max_iterations:
+             logger.warning("[Orchestrator Hub] Hit max loop iterations! Forcing pause.")
+             final_status = "completed_with_errors"
+
+    except Exception as fatal_e:
+        logger.error(f"[Orchestrator Hub] Fatal Orchestration Loop exception: {fatal_e}", exc_info=True)
+        final_status = "failed"
+        await chat_push(user_id, f"🚨 Critical Swarm Failure. The Orchestrator loop crashed: {str(fatal_e)}", "orchestrator", goal_id)
+
+    # FINAL State Write (Closes the "Perma-Executing" Deadlock)
     async with async_session() as session:
-        goal_row = await session.get(Goal, goal_id)
-        if goal_row:
-            goal_row.plan = json.dumps(campaign_plan)
-            goal_row.tasks_total = len(tasks)
+        g = await session.get(Goal, goal_id)
+        if g:
+            g.status = final_status
+            if final_status == "completed":
+                g.progress_percent = 100
             await session.commit()
-            logger.info(f"[Orchestrator] Persisted plan with {len(tasks)} tasks for goal {goal_id}")
-
-    # ── Step 4: Content Generation (Parallel per platform) ────────────────────
-    content_tasks = [t for t in tasks if t.get("task_type") == "generate_content"]
-    completed_ids: list = []
-
-    async def _gen_content(task):
-        result = await dispatch_content_director(
-            goal_id=goal_id, user_id=user_id, goal_description=goal_description,
-            platform=task.get("platform", "linkedin"), tasks=tasks,
-            campaign_plan=campaign_plan, research_findings=research_findings,
-            completed_task_ids=completed_ids, current_task_id=task.get("id")
-        )
-        if result["status"] == "ok":
-            completed_ids.append(task.get("id"))
-            # Merge generated content back into the task dict for persistence
-            for r in result.get("content_swarm_results", []):
-                if r.get("task_id") == task.get("id"):
-                    task["result"] = r.get("result", {})
-                    task["task_type"] = "post_content"  # Ready for publisher
-        return result
-
-    content_results = await asyncio.gather(*[_gen_content(t) for t in content_tasks])
-    logger.info(f"[Orchestrator] Content generation complete: {len(content_results)} results")
-
-    # Persist updated tasks with content back to Postgres
-    campaign_plan["tasks"] = tasks
-    async with async_session() as session:
-        goal_row = await session.get(Goal, goal_id)
-        if goal_row:
-            goal_row.plan = json.dumps(campaign_plan)
-            goal_row.tasks_completed = len(completed_ids)
-            if len(tasks) > 0:
-                goal_row.progress_percent = (len(completed_ids) / len(tasks)) * 100
-            await session.commit()
-            logger.info(f"[Orchestrator] Persisted {len(completed_ids)} content results for goal {goal_id}")
+            logger.info(f"[Orchestrator Hub] Execution Loop Terminated. Final Status: {final_status}")
 
     return {
-        "status": "ok",
+        "status": final_status,
         "goal_id": goal_id,
-        "tasks_generated": len(tasks),
-        "content_generated": len(content_results),
         "completed_ids": completed_ids,
+        "failed_ids": failed_ids
     }

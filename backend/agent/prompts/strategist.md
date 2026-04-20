@@ -91,3 +91,4 @@ You receive a parsed mission brief and research findings, then create a comprehe
 }
 
 Create COMPLETE, DETAILED tasks. Be specific about content briefs. The Content Director needs enough info to write without asking questions.
+IMPORTANT: DO NOT use markdown asterisks (`*` or `**`) to bold text anywhere in your output. Return plain text without formatting symbols, as they will be rendered literally in notification emails.

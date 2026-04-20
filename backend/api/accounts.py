@@ -84,3 +84,38 @@ async def delete_account(account_id: str, db: AsyncSession = Depends(get_db), cu
         await db.delete(acc)
         await db.commit()
     return {"status": "success"}
+
+@router.post("/{account_id}/provision")
+async def provision_account(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
+    """Triggers the Agentic Auth flow for a specific account via the Orchestrator."""
+    from database import Goal
+    import json
+    import asyncio
+    
+    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
+    result = await db.execute(stmt)
+    acc = result.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    goal_id = str(uuid.uuid4())
+    new_goal = Goal(
+        id=goal_id,
+        created_by=current_user.get("sub"),
+        title=f"Authenticate {acc.platform} ({acc.account_label})",
+        description=f"SYSTEM_AUTH_PROVISION: Start autonomous browser flow to authenticate account '{acc.account_label}' on platform '{acc.platform}'. Credentials might be in auth_data: '{acc.auth_data}'",
+        platforms=json.dumps([acc.platform]),
+        status="executing",
+    )
+    db.add(new_goal)
+    await db.commit()
+
+    # Fire the Orchestrator ReAct Loop in the background
+    try:
+        from langclaw_agents.orchestrator_app import run_orchestration
+        asyncio.create_task(run_orchestration(goal_id, trigger_source="settings_provision"))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to dispatch auth provision: {e}")
+
+    return {"status": "provisioning", "goal_id": goal_id}
