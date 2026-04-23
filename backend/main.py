@@ -215,6 +215,18 @@ app.include_router(whatsapp_router)
 
 @app.get("/api/health")
 async def health():
+    from agent.browser.ghost import ghost
+    try:
+        from database import async_session, PlatformConnection
+        from sqlalchemy import select, func
+        async with async_session() as db:
+            count = await db.scalar(select(func.count(PlatformConnection.id)).where(
+                PlatformConnection.connection_status == "connected"
+            ))
+            ghost_accounts = int(count or 0)
+    except Exception:
+        ghost_accounts = 0
+
     return {
         "status": "online",
         "service": "Digital Force",
@@ -226,7 +238,8 @@ async def health():
             "groq_3": bool(settings.groq_api_key_3),
         },
         "publishing": {
-            "buffer": bool(settings.buffer_access_token),
+            "ghost_browser": ghost.is_running,
+            "ghost_authenticated_accounts": ghost_accounts,
             "facebook": bool(settings.facebook_access_token),
         },
     }

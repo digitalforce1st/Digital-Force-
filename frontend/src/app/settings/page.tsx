@@ -350,6 +350,49 @@ export default function SettingsPage() {
     } catch(e) {}
   }
 
+  // ── Ghost Browser Secure Auth Flow ──────────────────────────────────────────
+  const handleGhostStart = async (acc: { id: string; platform: string }) => {
+    setGhostAuthLoading(true)
+    try {
+      const res = await fetch(`${BASE}/api/accounts/${acc.id}/ghost-auth/start`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (!res.ok) {
+        const err = await res.text()
+        throw new Error(`Browser failed to open: ${err}`)
+      }
+      // Show the "I have logged in" overlay modal
+      setGhostAuthId(acc.id)
+      setGhostAuthPlatform(acc.platform)
+    } catch (e: any) {
+      alert(e?.message || 'Failed to launch browser. Ensure Playwright is installed on the server.')
+    } finally {
+      setGhostAuthLoading(false)
+    }
+  }
+
+  const handleGhostVerify = async () => {
+    if (!ghostAuthId) return
+    setGhostAuthLoading(true)
+    try {
+      const res = await fetch(`${BASE}/api/accounts/${ghostAuthId}/ghost-auth/verify`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (!res.ok) throw new Error(`Verification failed (${res.status})`)
+      // Refresh the list — account should now show as 'connected'
+      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+      if (Array.isArray(fresh)) setAccounts(fresh)
+      setGhostAuthId(null)
+      setGhostAuthPlatform('')
+    } catch (e: any) {
+      alert(e?.message || 'Failed to save session. Try again.')
+    } finally {
+      setGhostAuthLoading(false)
+    }
+  }
+
   const handleTriggerResearch = async () => {
     await fetch(`${BASE}/api/agency/trigger-research`, { method: 'POST', headers: authHeaders() })
   }

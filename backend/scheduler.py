@@ -60,7 +60,7 @@ class PostScheduler:
     def __init__(self):
         self._queue: asyncio.Queue = asyncio.Queue()
         self._running = False
-        self._workers: list[asyncio.Task] = set()
+        self._workers: list = []  # Fixed: list not set, so we can cancel properly
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_POSTS)
 
         # Track posts per account per day: {account_id_platform: [timestamps]}
@@ -72,11 +72,10 @@ class PostScheduler:
     async def start(self):
         """Start the scheduler workers and APScheduler."""
         self._running = True
-
         # Start worker pool
         for i in range(MAX_CONCURRENT_POSTS):
             task = asyncio.create_task(self._worker(i))
-            self._workers.add(task)
+            self._workers.append(task)
 
         # Start APScheduler for recurring/timed jobs
         try:
@@ -230,83 +229,61 @@ class PostScheduler:
     async def _execute_job(self, job: dict):
         """
         Run the actual posting operation for a queued job.
-
-        Execution order:
-          1. Buffer API (via credential pool) — primary for ALL platforms
-          2. Ghost Browser vision agent      — fallback if no credentials or all fail
+        Uses Ghost Browser (cookie-based persistent session) exclusively.
         """
         from agent.chat_push import chat_push
 
-        platform  = job["platform"]
+        platform   = job["platform"]
         account_id = job["account_id"]
-        user_id   = job["user_id"]
-        goal_id   = job["goal_id"]
-        account   = job.get("account", {})
-        post_text = job["post_text"]
+        user_id    = job["user_id"]
+        goal_id    = job["goal_id"]
+        account    = job.get("account", {})
+        post_text  = job["post_text"]
         media_urls = job.get("media_urls", [])
-        display   = account.get("display_name", account_id)
+        display    = account.get("display_name", account_id)
 
-        success = False
+        success   = False
         error_msg = ""
         method_used = ""
 
-        # ── PRIMARY: Buffer Credential Pool ────────────────────────────────────
+        # ── Ghost Browser (cookie session) ──────────────────────────────────────
         try:
-            from agent.publishing.credential_pool import post_with_best_credential
-            api_result = await post_with_best_credential(
+            from agent.nodes.publisher import _post_via_ghost_browser
+            ghost_result = await _post_via_ghost_browser(
+                account=account,
                 platform=platform,
-                user_id=user_id,
                 content=post_text,
                 media_urls=media_urls,
-                account_name=account.get("display_name", ""),
+                user_id=user_id,
+                goal_id=goal_id,
             )
-
-            if api_result.get("success"):
-                success = True
-                method_used = f"Buffer API ({api_result.get('credential_label', '?')})"
-            elif api_result.get("no_credentials"):
-                # No Buffer accounts configured — go straight to Ghost Browser
-                logger.info(
-                    f"[Scheduler] No Buffer credentials for '{platform}'. "
-                    f"Using Ghost Browser fallback."
-                )
-                error_msg = api_result.get("error", "No credentials")
-            else:
-                # Credentials exist but all failed
-                error_msg = api_result.get("error", "All Buffer credentials failed")
-                logger.warning(
-                    f"[Scheduler] All Buffer credentials failed for {platform}: {error_msg[:100]}. "
-                    f"Attempting Ghost Browser fallback."
-                )
-                await chat_push(
-                    user_id=user_id,
-                    content=f"Buffer API unavailable for {platform.upper()} ({error_msg[:80]}). Trying Ghost Browser...",
-                    agent_name="scheduler",
-                    goal_id=goal_id,
-                )
+            success = ghost_result.get("success", False)
+            error_msg = ghost_result.get("error", "")
+            if success:
+                method_used = "Ghost Browser"
         except Exception as e:
-            logger.error(f"[Scheduler] Credential pool error: {e}", exc_info=True)
             error_msg = str(e)
+            logger.error(f"[Scheduler] Ghost Browser execution failed: {e}", exc_info=True)
 
-        # ── FALLBACK: Ghost Browser ─────────────────────────────────────────────
-        if not success:
+        # ── Facebook Graph API direct (when access_token is set) ─────────────────
+        if not success and platform == "facebook":
             try:
-                from agent.nodes.publisher import _post_via_ghost_browser
-                ghost_result = await _post_via_ghost_browser(
-                    account=account,
-                    platform=platform,
-                    content=post_text,
-                    media_urls=media_urls,
-                    user_id=user_id,
-                    goal_id=goal_id,
-                )
-                success = ghost_result.get("success", False)
-                error_msg = ghost_result.get("error", error_msg)
-                if success:
-                    method_used = "Ghost Browser"
+                from config import get_settings
+                cfg = get_settings()
+                if cfg.facebook_access_token and cfg.facebook_page_id:
+                    from agent.nodes.publisher import _post_facebook_api
+                    fb_result = await _post_facebook_api(
+                        page_id=cfg.facebook_page_id,
+                        access_token=cfg.facebook_access_token,
+                        content=post_text,
+                        media_urls=media_urls,
+                    )
+                    success = fb_result.get("success", False)
+                    error_msg = fb_result.get("error", error_msg)
+                    if success:
+                        method_used = "Facebook Graph API"
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"[Scheduler] Ghost Browser fallback failed: {e}", exc_info=True)
+                logger.warning(f"[Scheduler] Facebook direct API fallback failed: {e}")
 
         # ── Result reporting ────────────────────────────────────────────────────
         if success:
@@ -321,7 +298,7 @@ class PostScheduler:
         else:
             await chat_push(
                 user_id=user_id,
-                content=f"Failed to post to {platform.upper()} / {display}: {error_msg[:120]}",
+                content=f"Failed to post to {platform.upper()} / {display}: {error_msg[:150]}",
                 agent_name="scheduler",
                 goal_id=goal_id,
             )

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     environment: str = "development"  # development | staging | production
     debug: bool = True
     base_url: str = "http://localhost:8000"
+    backend_url: str = "http://localhost:8000"   # Used by agents to build absolute media URLs
     frontend_url: str = "http://localhost:3000"
 
     # ── Security ─────────────────────────────────────────

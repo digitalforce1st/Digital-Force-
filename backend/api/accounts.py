@@ -54,7 +54,7 @@ async def create_account(account: AccountCreate, db: AsyncSession = Depends(get_
         auth_data=account.auth_data,
         account_name=account.account_name,
         is_enabled=True,
-        connection_status="connected" # Assume connected if they supply truth bucket info, or ghost will update it later
+        connection_status="pending",  # Must be verified via Ghost Browser auth
     )
     db.add(new_account)
     await db.commit()

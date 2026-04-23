@@ -467,3 +467,9 @@ async def heal_dom_selector(screenshot_path: str, failed_selector: str) -> Optio
     except Exception as e:
         logger.error(f"[Vision Healer] {e}")
     return None
+
+
+# ── Compatibility aliases ───────────────────────────────────────────────────────
+# get_custom_llm is an alias for get_tool_llm — used by publisher.py and other nodes.
+# backend_url helper for building absolute media URLs in content_director.
+get_custom_llm = get_tool_llm
