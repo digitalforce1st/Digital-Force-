@@ -74,50 +74,43 @@ async def chat_stream(
     active_goals_result = await db.execute(active_goals_query)
     active_goal = active_goals_result.scalar_one_or_none()
 
-    # 3. Intent classification — aggressive, extracts platforms and whether workflow is needed
-    requires_workflow = False
+    # 3. Intent classification — robust intent router
+    intent = "conversational"
     detected_platforms = []
     approval_status = "none"
 
     try:
         from agent.llm import generate_json
 
-        clf_prompt = f"""You are the intent classifier for an autonomous social media marketing agency AI.
+        clf_prompt = f"""You are the master intent router for an autonomous social media marketing agency AI.
 
 User message: "{body.message}"
 Attached assets: {len(all_asset_ids)} file(s)
 
-Classify this message carefully:
+Classify this message carefully into an "intent":
 
-"requires_workflow" is TRUE if the user is asking the agency to:
-- Create, plan, launch, deploy, or run a campaign
-- Post or schedule content on social media
-- Research competitors or trends for a campaign purpose
-- Generate content (captions, posts, scripts)
-- Automate or manage any social media account
-- Analyze performance and take action
-- Use uploaded assets/media/photos/videos to create posts
-
-"requires_workflow" is FALSE for:
-- General questions, greetings, or clarifications
-- Asking about system status or what's happening
-- Approving or rejecting an existing plan
-
-IMPORTANT: If the user has attached media assets ({len(all_asset_ids)} files attached), this strongly indicates campaign intent.
+1. "task": User is asking to create, deploy, run, post, or launch a campaign/action. (If files are attached, it is almost certainly a task).
+2. "planning": User is asking to strategize, outline, or plan a campaign, but NOT execute it yet. Brainstorming.
+3. "conversational": General questions, asking about system status, greetings, or clarifications. No campaign creation needed.
 
 "platforms" is a list of detected social platforms (instagram, tiktok, linkedin, facebook, twitter, youtube, whatsapp). Empty list if none mentioned.
+"approval_status" check: if the user is explicitly approving or rejecting a waiting plan, set it. Otherwise "none".
 
 Return ONLY valid JSON:
 {{
-  "requires_workflow": <true or false>,
+  "intent": "conversational" | "planning" | "task",
   "platforms": ["platform1", "platform2"],
   "approval_status": "approved" | "rejected" | "none"
 }}"""
 
         clf = await generate_json(clf_prompt)
-        requires_workflow = clf.get("requires_workflow", False)
+        intent = clf.get("intent", "conversational")
         detected_platforms = clf.get("platforms", [])
         approval_status = clf.get("approval_status", "none")
+
+        # Fallback safeguard
+        if intent not in ["conversational", "planning", "task"]:
+            intent = "conversational"
 
         # Handle approval of existing goal
         if approval_status == "approved" and active_goal and active_goal.status == "awaiting_approval":
@@ -140,10 +133,10 @@ Return ONLY valid JSON:
                 user_id=user_id,
                 message=body.message,
                 goal_id=active_goal.id if active_goal else None,
-                requires_workflow=requires_workflow,
+                intent=intent,
                 detected_platforms=detected_platforms,
                 asset_ids=all_asset_ids,
-            ):
+            ): 
                 yield f"data: {json.dumps(event)}\n\n"
                 await asyncio.sleep(0)  # yield control to event loop
 

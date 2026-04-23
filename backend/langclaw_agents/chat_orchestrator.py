@@ -125,7 +125,7 @@ async def stream_chat_agent(
     user_id: str,
     message: str,
     goal_id: Optional[str] = None,
-    requires_workflow: bool = False,
+    intent: str = "conversational",
     detected_platforms: list = None,
     asset_ids: List[str] = None,
 ) -> AsyncGenerator[dict, None]:
@@ -156,8 +156,8 @@ async def stream_chat_agent(
     media_assets = ctx["media_assets"]
 
     # ── If campaign work requested: create goal and fire orchestrator ────────────
-    if requires_workflow:
-        yield {"type": "thinking", "content": f"Campaign intent detected with {len(asset_ids)} media asset(s) attached. Creating autonomous execution goal and activating the Orchestrator Swarm..."}
+    if intent == "task":
+        yield {"type": "thinking", "content": f"Campaign task intent detected with {len(asset_ids)} media asset(s) attached. Creating autonomous execution goal and activating the Orchestrator Swarm..."}
 
         # Use existing goal_id or create a new one
         if not goal_id:
@@ -221,6 +221,11 @@ async def stream_chat_agent(
             return
         else:
             yield {"type": "thinking", "content": "Could not create goal. Falling back to conversational mode."}
+    elif intent == "planning":
+        yield {"type": "thinking", "content": f"Planning intent detected. Initializing a planning goal without executing..."}
+        if not goal_id:
+            goal_id = await _create_goal_from_chat(user_id, message, detected_platforms, asset_ids)
+        # We don't trigger the run_orchestration yet. Just let the LLM reply conversationally.
 
     # ── Build conversation history ────────────────────────────────────────────────
     async with async_session() as db:
@@ -254,7 +259,7 @@ async def stream_chat_agent(
     active_goals_block = ""
     if active_goals:
         lines = [f"  - [{g['status'].upper()}] {g['title']} (ID: {g['id'][:8]}..., Progress: {g['progress']}%)" for g in active_goals]
-        active_goals_block = "ACTIVE CAMPAIGNS:\n" + "\n".join(lines)
+        active_goals_block = "ACTIVE CAMPAIGNS (What is Currently Happening):\n" + "\n".join(lines)
     else:
         active_goals_block = "ACTIVE CAMPAIGNS: None currently running."
 
@@ -295,12 +300,13 @@ You have access to tools that let you: execute Python code, query the knowledge 
 CRITICAL OPERATING RULES:
 1. You are NOT a generic chatbot. You are an autonomous agency command interface.
 2. When the user asks you to DO something that requires analysis, searching, or database reads — USE YOUR TOOLS. Do not answer from memory alone.
-3. When the user mentions credentials, passwords, or authentication codes — USE the update_truth_bucket tool immediately.
-4. When you reference an account or campaign, be specific about which one from the list above.
-5. After tool results, synthesize a concise, expert final answer.
-6. Never use markdown asterisks for bolding. Return plain text only.
-7. Be direct, confident, and enterprise-grade in tone.
-8. When the user says "use these images/videos" or "post these assets", refer to the AVAILABLE MEDIA ASSETS and CURRENTLY ATTACHED ASSETS sections above.
+3. Be EXTREMELY aware of everything currently executing in the "ACTIVE CAMPAIGNS" block. If asked what's currently happening, summarize those campaigns intelligently.
+4. When the user mentions credentials, passwords, or authentication codes — USE the update_truth_bucket tool immediately.
+5. When you reference an account or campaign, be specific about which one from the list above.
+6. After tool results, synthesize a concise, expert final answer.
+7. Never use markdown asterisks for bolding. Return plain text only.
+8. Be direct, confident, and enterprise-grade in tone.
+9. When the user says "use these images/videos" or "post these assets", refer to the AVAILABLE MEDIA ASSETS and CURRENTLY ATTACHED ASSETS sections above.
 """
     messages.insert(0, SystemMessage(content=system_prompt))
 

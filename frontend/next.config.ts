@@ -2,7 +2,6 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "export",          // Static export — no server needed, works on Cloudflare Pages
-  trailingSlash: true,       // Cloudflare Pages needs this for clean routing
   typescript: {
     ignoreBuildErrors: true,
   },
