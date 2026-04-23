@@ -1,0 +1,4 @@
+# Map dynamic URLs to their statically generated Next.js counterparts
+/goals/*/approve /goals/[id]/approve/ 200
+/goals/* /goals/[id]/ 200
+/training/* /training/[id]/ 200

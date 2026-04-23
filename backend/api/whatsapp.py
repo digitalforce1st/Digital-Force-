@@ -100,9 +100,9 @@ async def request_whatsapp_qr(user: dict = Depends(get_current_user)):
         QR_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            # CRITICAL: headless=False for WhatsApp Web fingerprinting bypass
-            page = await ghost.get_page(account_id="whatsapp_automation", headless=False)
-            logger.info("[WhatsApp QR] Navigating to WhatsApp Web (HEADED mode)...")
+            # Headless=True to support background/server deployment without GUI crashes
+            page = await ghost.get_page(account_id="whatsapp_automation", headless=True)
+            logger.info("[WhatsApp QR] Navigating to WhatsApp Web (HEADLESS mode)...")
             
             await page.goto("https://web.whatsapp.com", wait_until="domcontentloaded", timeout=30000)
             # Let the JS fully render

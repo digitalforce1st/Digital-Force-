@@ -139,8 +139,12 @@ class GhostBrowser:
                     self._semaphore.release()
                     raise e
 
-        # Open a new tab in the existing context (fast — no new process)
-        page = await self._contexts[ctx_key].new_page()
+        # Reuse existing tab or create new one if none
+        context = self._contexts[ctx_key]
+        if context.pages:
+            return context.pages[-1]
+            
+        page = await context.new_page()
         await page.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )

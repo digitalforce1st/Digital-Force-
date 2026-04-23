@@ -56,7 +56,6 @@ async def ghost_goto(url: str, account_id: str = "default") -> str:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
         title = await page.title()
-        await page.close()
         return f"Navigated to {url}. Page title: '{title}'"
     except Exception as e:
         return f"Error navigating to {url}: {e}"
@@ -84,7 +83,6 @@ async def ghost_see(question: str, account_id: str = "default") -> str:
 
         pic_path = f"ghost_screenshot_{account_id}.png"
         await page.screenshot(path=pic_path, full_page=False)
-        await page.close()
 
         key = settings.groq_api_key_1 or settings.groq_api_key_2 or settings.groq_api_key_3
         if not key:
@@ -164,7 +162,6 @@ async def ghost_click(selector_or_text: str, account_id: str = "default") -> str
                 pass
 
         await asyncio.sleep(2)
-        await page.close()
 
         if clicked:
             return f"Clicked '{selector_or_text}' successfully."
@@ -195,7 +192,6 @@ async def ghost_type(text: str, account_id: str = "default", clear_first: bool =
         # Use keyboard.type for natural human-like input (avoids bot detection)
         await page.keyboard.type(text, delay=25)
         await asyncio.sleep(1)
-        await page.close()
         chars = len(text)
         preview = text[:60] + "..." if len(text) > 60 else text
         return f"Typed {chars} characters: '{preview}'"
@@ -217,7 +213,6 @@ async def ghost_press_key(key: str, account_id: str = "default") -> str:
             return "Fatal: Ghost Browser is not running."
         await page.keyboard.press(key)
         await asyncio.sleep(1.5)
-        await page.close()
         return f"Pressed key: '{key}'"
     except Exception as e:
         return f"Key press error: {e}"
@@ -246,7 +241,6 @@ async def ghost_upload_file(file_path: str, account_id: str = "default") -> str:
         file_chooser = await fc_info.value
         await file_chooser.set_files(file_path)
         await asyncio.sleep(3)  # Wait for upload to process
-        await page.close()
         return f"Uploaded file: {os.path.basename(file_path)}"
     except Exception as e:
         return f"File upload error: {e}"
@@ -281,7 +275,6 @@ async def ghost_get_page_text(account_id: str = "default") -> str:
         if not page:
             return "Fatal: Ghost Browser is not running."
         text = await page.inner_text("body")
-        await page.close()
         # Trim to a reasonable length
         return text[:3000] + "..." if len(text) > 3000 else text
     except Exception as e:
@@ -300,7 +293,6 @@ async def ghost_scroll(amount_pixels: int, account_id: str = "default") -> str:
             return "Fatal: Ghost Browser is not running."
         await page.evaluate(f"window.scrollBy(0, {amount_pixels})")
         await asyncio.sleep(1)
-        await page.close()
         return f"Scrolled {amount_pixels}px {'down' if amount_pixels > 0 else 'up'}."
     except Exception as e:
         return f"Scroll error: {e}"

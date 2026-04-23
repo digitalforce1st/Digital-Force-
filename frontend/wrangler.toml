@@ -1,0 +1,6 @@
+name = "digital-force"
+pages_build_output_dir = "out"
+
+[env.production]
+# Environment variables are set in the Cloudflare Pages dashboard
+# NEXT_PUBLIC_API_URL is baked in at build time via .env.production

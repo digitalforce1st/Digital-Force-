@@ -313,7 +313,12 @@ CRITICAL OPERATING RULES:
     }
     tools = get_agent_tools(mock_state)
     tool_map = {t.name: t for t in tools}
-    llm = get_tool_llm(temperature=0.2).bind_tools(tools)
+
+    try:
+        llm = get_tool_llm(temperature=0.2).bind_tools(tools)
+    except RuntimeError as e:
+        yield {"type": "error", "content": f"No AI providers available: {e}"}
+        return
 
     max_loops = 6
     loops = 0
@@ -350,7 +355,22 @@ CRITICAL OPERATING RULES:
                             tool_calls_buffer[idx]["args_str"] += tc_chunk["args"]
 
         except Exception as e:
-            yield {"type": "error", "content": f"LLM stream error: {e}"}
+            err_str = str(e)
+            # Groq 'failed_generation' = model doesn't support tool calling
+            # Mark the current Groq key exhausted so cascade skips it, then retry
+            if "failed_generation" in err_str or "Failed to call a function" in err_str:
+                logger.warning(f"[StreamOrchestrator] Groq tool-call rejection detected. Rotating provider: {err_str[:100]}")
+                from agent.llm import _exhausted_keys
+                # Extract the API key from the current LLM instance if possible
+                try:
+                    bad_key = llm.bound.api_key  # ChatGroq stores api_key here
+                    _exhausted_keys.add(bad_key)
+                    logger.info(f"[StreamOrchestrator] Marked Groq key exhausted for tool calls, retrying...")
+                    llm = get_tool_llm(temperature=0.2).bind_tools(tools)
+                    continue  # retry this loop iteration with new LLM
+                except Exception as rotate_err:
+                    logger.error(f"[StreamOrchestrator] Provider rotation failed: {rotate_err}")
+            yield {"type": "error", "content": f"LLM stream error: {err_str}"}
             return
 
         # ── Emit the model's textual reasoning ─────────────────────────────────
@@ -411,6 +431,19 @@ CRITICAL OPERATING RULES:
                     result = await tool_fn.ainvoke(tool_args)
                     result_str = str(result)
 
+                    # INTERCEPT ROUTING REQUESTS AND PHYSICALLY LAUNCH DAG
+                    if "ROUTING_REQUESTED:" in result_str:
+                        target = result_str.split("ROUTING_REQUESTED:")[1].strip()
+                        
+                        # Create goal if it doesn't exist
+                        if not goal_id:
+                            goal_id = await _create_goal_from_chat(user_id, message, detected_platforms, asset_ids)
+                            
+                        if goal_id and target != "__end__":
+                            from langclaw_agents.orchestrator_app import run_orchestration
+                            asyncio.create_task(run_orchestration(goal_id, trigger_source=f"chat_routed_{target}"))
+                            yield {"type": "action", "content": f"Dynamically launching autonomous workflow via {target}", "tool": "swarm_trigger", "args": {}}
+                    
                     async with async_session() as db:
                         db.add(AgentLog(
                             id=str(uuid.uuid4()),

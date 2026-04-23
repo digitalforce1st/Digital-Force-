@@ -28,7 +28,8 @@ Write-Host "Starting backend (no hot-reload — run this script after each chang
 Set-Location "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend"
 
 # Start in background so this script returns immediately
-Start-Process -FilePath "python" -ArgumentList "-m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level info" -NoNewWindow
+$venvPython = "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\python.exe"
+Start-Process -FilePath $venvPython -ArgumentList "-m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level info" -NoNewWindow
 
 Start-Sleep -Seconds 3
 

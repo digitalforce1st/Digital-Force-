@@ -228,90 +228,105 @@ class PostScheduler:
                 self._queue.task_done()
 
     async def _execute_job(self, job: dict):
-        """Run the actual posting operation for a queued job."""
+        """
+        Run the actual posting operation for a queued job.
+
+        Execution order:
+          1. Buffer API (via credential pool) — primary for ALL platforms
+          2. Ghost Browser vision agent      — fallback if no credentials or all fail
+        """
         from agent.chat_push import chat_push
 
-        platform = job["platform"]
+        platform  = job["platform"]
         account_id = job["account_id"]
-        user_id = job["user_id"]
-        goal_id = job["goal_id"]
-
-        await chat_push(
-            user_id=user_id,
-            content=f"Scheduler executing: posting to {platform.upper()} / {job['account'].get('display_name', account_id)}",
-            agent_name="scheduler",
-            goal_id=goal_id,
-        )
+        user_id   = job["user_id"]
+        goal_id   = job["goal_id"]
+        account   = job.get("account", {})
+        post_text = job["post_text"]
+        media_urls = job.get("media_urls", [])
+        display   = account.get("display_name", account_id)
 
         success = False
         error_msg = ""
+        method_used = ""
 
+        # ── PRIMARY: Buffer Credential Pool ────────────────────────────────────
         try:
-            if platform == "facebook":
-                # Try Facebook Graph API first
-                from agent.nodes.publisher import _post_facebook_api
-                auth_info = {}
-                try:
-                    auth_info = json.loads(job["account"].get("auth_data", "{}"))
-                except Exception:
-                    pass
-                fb_result = await _post_facebook_api(
-                    page_id=auth_info.get("page_id", ""),
-                    access_token=auth_info.get("access_token", ""),
-                    content=job["post_text"],
-                    media_urls=job["media_urls"],
+            from agent.publishing.credential_pool import post_with_best_credential
+            api_result = await post_with_best_credential(
+                platform=platform,
+                user_id=user_id,
+                content=post_text,
+                media_urls=media_urls,
+                account_name=account.get("display_name", ""),
+            )
+
+            if api_result.get("success"):
+                success = True
+                method_used = f"Buffer API ({api_result.get('credential_label', '?')})"
+            elif api_result.get("no_credentials"):
+                # No Buffer accounts configured — go straight to Ghost Browser
+                logger.info(
+                    f"[Scheduler] No Buffer credentials for '{platform}'. "
+                    f"Using Ghost Browser fallback."
                 )
-                if fb_result.get("success"):
-                    success = True
-                else:
-                    # Fallback to Ghost Browser
-                    from agent.nodes.publisher import _post_via_ghost_browser
-                    result = await _post_via_ghost_browser(
-                        account=job["account"],
-                        platform=platform,
-                        content=job["post_text"],
-                        media_urls=job["media_urls"],
-                        user_id=user_id,
-                        goal_id=goal_id,
-                    )
-                    success = result.get("success", False)
-                    error_msg = result.get("error", "")
+                error_msg = api_result.get("error", "No credentials")
             else:
-                # Ghost Browser for all other platforms
+                # Credentials exist but all failed
+                error_msg = api_result.get("error", "All Buffer credentials failed")
+                logger.warning(
+                    f"[Scheduler] All Buffer credentials failed for {platform}: {error_msg[:100]}. "
+                    f"Attempting Ghost Browser fallback."
+                )
+                await chat_push(
+                    user_id=user_id,
+                    content=f"Buffer API unavailable for {platform.upper()} ({error_msg[:80]}). Trying Ghost Browser...",
+                    agent_name="scheduler",
+                    goal_id=goal_id,
+                )
+        except Exception as e:
+            logger.error(f"[Scheduler] Credential pool error: {e}", exc_info=True)
+            error_msg = str(e)
+
+        # ── FALLBACK: Ghost Browser ─────────────────────────────────────────────
+        if not success:
+            try:
                 from agent.nodes.publisher import _post_via_ghost_browser
-                result = await _post_via_ghost_browser(
-                    account=job["account"],
+                ghost_result = await _post_via_ghost_browser(
+                    account=account,
                     platform=platform,
-                    content=job["post_text"],
-                    media_urls=job["media_urls"],
+                    content=post_text,
+                    media_urls=media_urls,
                     user_id=user_id,
                     goal_id=goal_id,
                 )
-                success = result.get("success", False)
-                error_msg = result.get("error", "")
+                success = ghost_result.get("success", False)
+                error_msg = ghost_result.get("error", error_msg)
+                if success:
+                    method_used = "Ghost Browser"
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"[Scheduler] Ghost Browser fallback failed: {e}", exc_info=True)
 
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"[Scheduler] Job execution exception: {e}", exc_info=True)
-
+        # ── Result reporting ────────────────────────────────────────────────────
         if success:
             self._record_post(account_id, platform)
             await chat_push(
                 user_id=user_id,
-                content=f"Posted to {platform.upper()} / {job['account'].get('display_name', account_id)}",
+                content=f"Posted to {platform.upper()} / {display} via {method_used}.",
                 agent_name="scheduler",
                 goal_id=goal_id,
             )
-            # Update task status in DB
             await self._mark_task_done(job["task_id"], "completed")
         else:
             await chat_push(
                 user_id=user_id,
-                content=f"Failed to post to {platform.upper()} / {job['account'].get('display_name', account_id)}: {error_msg[:100]}",
+                content=f"Failed to post to {platform.upper()} / {display}: {error_msg[:120]}",
                 agent_name="scheduler",
                 goal_id=goal_id,
             )
             await self._mark_task_done(job["task_id"], "failed", error_msg)
+
 
     async def _mark_task_done(self, task_id: str, status: str, error: str = ""):
         """Update the AgentTask status in the database."""

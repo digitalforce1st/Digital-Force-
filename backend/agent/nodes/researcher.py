@@ -92,11 +92,7 @@ Once you have explored enough data across your tools, stop calling tools. Your f
         )
     except Exception as e:
         logger.error(f"[Researcher ReAct Engine] Halting due to recursion or exception: {e}")
-        # Return fallback on fatal loop crash
-        return {
-            "research_findings": {"trending_topics": ["General Trend"], "recommended_hashtags": {"global": ["#marketing"]}, "content_angles": ["Educational"], "audience_insights": "Fallback due to timeout."},
-            "next_agent": "supervisor"
-        }
+        raise RuntimeError(f"Live research failed: {e}")
 
     # Extract final message and parse JSON
     messages = final_state.get("messages", [])
@@ -116,10 +112,7 @@ Once you have explored enough data across your tools, stop calling tools. Your f
             findings = json.loads(output)
     except Exception as e:
         logger.warning(f"[Researcher] Could not parse exact JSON from loop output: {e}\nRaw: {output[:200]}")
-        findings = {
-            "trending_topics": ["General"], "recommended_hashtags": {"global": ["#digital"]},
-            "content_angles": ["General Approach"], "audience_insights": output[:200]
-        }
+        raise ValueError(f"Failed to parse research data output: {e}")
 
     topics = findings.get('trending_topics', [])
     angles = findings.get('content_angles', [])

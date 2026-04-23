@@ -20,7 +20,7 @@ taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq uvicorn*" >nul 2>&
 
 echo [2/3] Starting backend (no hot-reload)...
 cd /d "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend"
-start "Digital Force Backend" /B python -m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level info
+start "Digital Force Backend" /B "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\python.exe" -m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level info
 
 echo [3/3] Waiting for server to come up...
 timeout /t 4 /nobreak >nul

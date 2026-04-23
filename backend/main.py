@@ -194,8 +194,11 @@ qr_dir = Path("./media/qr_codes")
 qr_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/qr", StaticFiles(directory=str(qr_dir)), name="qr_codes")
 
+from api.publishing_pool import router as publishing_pool_router
+
 # Routers
 app.include_router(auth_router)
+app.include_router(publishing_pool_router)
 app.include_router(goals_router)
 app.include_router(training_router)
 app.include_router(media_router)

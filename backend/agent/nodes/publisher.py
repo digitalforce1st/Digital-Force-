@@ -1,20 +1,24 @@
 """
 Digital Force — Publisher Agent Node
 =====================================
-Posts content to social media using the best available method per platform.
+Routes publishing tasks to the best available method per platform.
 
-STRATEGY:
-  Facebook  → Facebook Graph API (primary) → Ghost Browser (fallback)
-  All Other → Ghost Browser vision agent (LinkedIn, Instagram, TikTok,
-              Twitter, YouTube, WhatsApp, Pinterest — anything with a browser)
+STRATEGY (in order of preference):
+  1. Buffer API  → primary for ALL platforms (Facebook, Twitter, LinkedIn,
+                    Instagram, TikTok, Pinterest, etc.)
+                    Uses the dynamic credential pool — multiple Buffer accounts
+                    load-balanced automatically.
+  2. Ghost Browser → fallback when no Buffer credentials are configured
+                     or when all Buffer credentials have failed.
 
-The Ghost Browser approach requires NO API, NO OAuth approval, NO SDK.
-The agent literally browses to the platform, reads the screen with vision,
-finds the compose area, types the content, attaches media, and submits.
-It works on any platform a human can use.
+The publisher_node enqueues jobs into the PostScheduler immediately and
+returns NON-BLOCKING. The scheduler handles time distribution and rate limits.
+This allows the orchestrator to continue working while 200–500 posts execute
+in the background over minutes/hours.
 
-Truth Bucket provides per-account credentials (username/password or cookies)
-that the Ghost Browser uses to maintain authenticated sessions.
+Ghost Browser (fallback) literally browses to the platform, reads the screen
+with vision, and posts physically. Works on any platform a human can use,
+but is much slower and fragile vs. the Buffer API path.
 """
 
 import json
@@ -77,20 +81,20 @@ async def _mark_account_needs_reauth(account_id: str):
 
 async def publisher_node(state: AgentState) -> dict:
     """
-    Publisher node — enqueues all post_content tasks into the PostScheduler.
+    API-first publisher node.
 
-    The scheduler handles:
-    - Platform rate limits (no platform bans)
-    - Concurrency control (max 3 posts at once, not 500)
-    - Time distribution across the day
-    - Automatic retry on failure
-    - Progress updates to chat
+    For each post_content task:
+      1. Queries the Buffer credential pool to find available accounts for the platform
+      2. Enqueues jobs into the PostScheduler (non-blocking — returns immediately)
+      3. Scheduler executes: Buffer API first, Ghost Browser fallback
+      4. Pushes fleet status to chat so the operator knows exactly what's happening
 
-    This node returns IMMEDIATELY. Posts execute in the background over time.
-    This means the orchestrator doesn't get blocked waiting for 500 posts to finish.
+    This node returns IMMEDIATELY. The scheduler distributes posts over time
+    respecting platform rate limits, so 500 posts don't hammer a platform at once.
     """
     from agent.chat_push import chat_push, agent_thought_push
     from scheduler import scheduler
+    from agent.publishing.credential_pool import get_credentials_for
 
     goal_id = state.get("goal_id", "")
     user_id = state.get("created_by", "")
@@ -111,9 +115,78 @@ async def publisher_node(state: AgentState) -> dict:
             "failed_task_ids": failed_ids,
             "tasks": tasks,
             "next_agent": "orchestrator",
-            "messages": [{"role": "assistant", "name": "publisher", "content": "No publishable content tasks pending."}],
+            "messages": [{"role": "assistant", "name": "publisher",
+                          "content": "No publishable content tasks pending."}],
         }
 
+    # ── Credential pool reconnaissance ─────────────────────────────────────
+    # Pre-check which platforms have Buffer credentials so we can inform the operator
+    platforms_needed = list({t.get("platform", "").lower() for t in post_tasks if t.get("platform")})
+
+    await agent_thought_push(
+        user_id=user_id,
+        agent_name="publisher",
+        context=(
+            f"Publisher activating for {len(post_tasks)} post(s) across "
+            f"{len(platforms_needed)} platform(s): {', '.join(p.upper() for p in platforms_needed)}. "
+            f"Querying Buffer credential pool..."
+        ),
+        goal_id=goal_id,
+    )
+
+    fleet_lines = []
+    for platform in platforms_needed:
+        creds = await get_credentials_for(platform=platform, user_id=user_id)
+        if creds:
+            labels = ", ".join(c["label"] for c in creds[:3])
+            fleet_lines.append(
+                f"{platform.upper()}: {len(creds)} Buffer account(s) available ({labels})"
+            )
+        else:
+            fleet_lines.append(
+                f"{platform.upper()}: No Buffer credentials — will use Ghost Browser fallback"
+            )
+
+    if fleet_lines:
+        fleet_summary_text = "\n".join(f"  - {line}" for line in fleet_lines)
+        
+        # ── LLM Macro-Orchestration Strategy ──────────────────────────────────
+        try:
+            from agent.llm import get_custom_llm
+            from langchain_core.messages import HumanMessage
+            
+            prompt = (
+                f"You are the 'Digital Force Publisher Director' agent.\n"
+                f"You have just received {len(post_tasks)} post task(s) to distribute.\n\n"
+                f"Here is your current Publishing Fleet (Buffer API Accounts + Fallbacks):\n"
+                f"{fleet_summary_text}\n\n"
+                f"Write a very brief (1-2 sentences) intelligent 'Distribution Strategy' note to the user. "
+                f"Explain how you plan to distribute these {len(post_tasks)} posts across the available fleet "
+                f"to balance load and avoid rate limits. If a platform has no Buffer API account, mention that "
+                f"you are authorizing the Ghost Browser swarm fallback. "
+                f"Sound elite, analytical, and highly intelligent."
+            )
+            
+            llm = get_custom_llm(temperature=0.4)
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            strategy_reasoning = response.content.strip()
+            
+            await chat_push(
+                user_id=user_id,
+                content=f"🧠 **Publisher Macro-Strategy:**\n{strategy_reasoning}\n\n**Fleet Status:**\n{fleet_summary_text}",
+                agent_name="publisher",
+                goal_id=goal_id,
+            )
+        except Exception as e:
+            logger.warning(f"[Publisher] LLM Strategy formulation failed: {e}")
+            await chat_push(
+                user_id=user_id,
+                content="Publishing fleet ready:\n" + fleet_summary_text,
+                agent_name="publisher",
+                goal_id=goal_id,
+            )
+
+    # ── Enqueue all jobs into the scheduler ────────────────────────────────
     total_enqueued = 0
     total_skipped = 0
 
@@ -134,48 +207,43 @@ async def publisher_node(state: AgentState) -> dict:
         post_text = "\n\n".join(filter(None, [hook, body, cta, hashtags])).strip()
         media_urls: List[str] = content_result.get("media_urls", [])
 
+        # The scheduler uses Truth Bucket accounts for Ghost Browser fallback;
+        # for the Buffer API path it uses the credential pool directly.
+        # Enqueue with a synthetic account so the scheduler has context.
         accounts = await _get_accounts_for_platform(platform)
+        fallback_accounts = accounts if accounts else [{"id": "pool", "display_name": platform, "platform": platform, "auth_data": ""}]
 
-        if not accounts:
-            failed_ids.append(task.get("id"))
-            task["error"] = f"No {platform} accounts configured in Truth Bucket"
-            total_skipped += 1
-            continue
+        scheduled_for = None
+        raw_time = task.get("scheduled_for")
+        if raw_time:
+            try:
+                scheduled_for = datetime.fromisoformat(raw_time)
+            except Exception:
+                pass
 
-        # Enqueue one job per account — scheduler handles the timing
-        for account in accounts:
-            scheduled_for = None
-            raw_time = task.get("scheduled_for")
-            if raw_time:
-                try:
-                    from datetime import datetime
-                    scheduled_for = datetime.fromisoformat(raw_time)
-                except Exception:
-                    pass
+        # Enqueue one job — scheduler handles platform rate limits
+        await scheduler.enqueue(
+            goal_id=goal_id,
+            task_id=task.get("id", ""),
+            account_id=fallback_accounts[0]["id"],
+            platform=platform,
+            post_text=post_text,
+            media_urls=media_urls,
+            user_id=user_id,
+            scheduled_for=scheduled_for,
+            account=fallback_accounts[0],
+        )
+        total_enqueued += 1
 
-            await scheduler.enqueue(
-                goal_id=goal_id,
-                task_id=task.get("id", ""),
-                account_id=account["id"],
-                platform=platform,
-                post_text=post_text,
-                media_urls=media_urls,
-                user_id=user_id,
-                scheduled_for=scheduled_for,
-                account=account,
-            )
-            total_enqueued += 1
-
-        # Mark task as "queued" — scheduler will mark it completed when done
         task["status"] = "queued"
         completed_ids.append(task.get("id"))
 
     queue_depth = scheduler.queue_size
     summary = (
-        f"Enqueued {total_enqueued} post job(s) across {len(post_tasks)} tasks. "
-        f"Scheduler queue depth: {queue_depth}. "
-        f"Posts will publish respecting platform rate limits. "
-        + (f"{total_skipped} task(s) skipped (missing content or accounts)." if total_skipped else "")
+        f"Enqueued {total_enqueued} post job(s) into the publishing queue. "
+        f"Queue depth: {queue_depth}. "
+        f"Execution strategy: Buffer API first, Ghost Browser fallback. "
+        + (f"{total_skipped} skipped (missing content)." if total_skipped else "")
     )
 
     await chat_push(
@@ -417,10 +485,6 @@ RULES:
                 pass
         return {"success": False, "error": str(e)}
 
-
-# ── Main Publisher Node ────────────────────────────────────────────────────────
-
-async def publisher_node(state: AgentState) -> dict:
     """
     Multi-account, multi-platform publisher.
 

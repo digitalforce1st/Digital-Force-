@@ -473,6 +473,70 @@ class PendingEmailApproval(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+# ═══════════════════════════════════════════════════════════
+# API CREDENTIAL POOL — Dynamic Buffer Publishing Fleet
+# ═══════════════════════════════════════════════════════════
+
+class ApiCredentialPool(Base):
+    """
+    Stores each Buffer account as one row.
+    One Buffer account connects up to N social profiles (platform-limited by Buffer tier).
+    Multiple rows = multiple Buffer accounts = horizontal scale for massive campaigns.
+
+    credential_data is Fernet-encrypted JSON: {"access_token": "1/buf_xyz..."}
+    connected_accounts is auto-synced from the Buffer API on connect/refresh.
+    """
+    __tablename__ = "api_credential_pool"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+
+    # Human-readable label e.g. "Brighton Buffer #1", "Client Buffer A"
+    label: Mapped[str] = mapped_column(String(200))
+
+    # API type — "buffer" for now; field kept for future extensibility
+    api_type: Mapped[str] = mapped_column(String(50), default="buffer")
+
+    # JSON list of platforms this Buffer account has connected
+    # e.g. ["twitter", "linkedin", "instagram", "facebook"]
+    # Auto-populated from Buffer API /profiles.json on connect
+    platforms: Mapped[str] = mapped_column(Text, default="[]")
+
+    # JSON list of connected social profiles
+    # Each entry: {buffer_profile_id, platform, account_name, account_id, profile_url}
+    # Example:
+    #   [{"buffer_profile_id": "abc", "platform": "twitter", "account_name": "@company", ...},
+    #    {"buffer_profile_id": "def", "platform": "linkedin", "account_name": "Company Page", ...}]
+    connected_accounts: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default="[]")
+
+    # Fernet-encrypted JSON payload: {"access_token": "1/xxxxxxxx"}
+    # NEVER stored in plaintext. Decrypted only at post-execution time.
+    credential_data: Mapped[str] = mapped_column(Text)
+
+    # ── Rate Limit Tracking ─────────────────────────────────
+    # Counters reset daily/hourly; compared against daily_limit before use
+    posts_today: Mapped[int] = mapped_column(Integer, default=0)
+    posts_this_hour: Mapped[int] = mapped_column(Integer, default=0)
+    last_reset_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)   # "YYYY-MM-DD"
+    last_reset_hour: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)      # 0-23
+
+    # Override the system default (None = use DEFAULT_DAILY_LIMITS["buffer"])
+    custom_daily_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # ── Health Tracking ─────────────────────────────────────
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    # active | exhausted | error | revoked
+
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    error_count: Mapped[int] = mapped_column(Integer, default=0)    # Consecutive failures
+    success_count: Mapped[int] = mapped_column(Integer, default=0)  # Lifetime successes
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 settings = get_settings()
 engine = create_async_engine(
     settings.database_url,

@@ -366,30 +366,65 @@ async def stream_chat_response(system: str, user: str, temperature: float = 0.7,
 
 
 def get_tool_llm(temperature: float = 0.3):
-    """LangChain-compatible LLM for ReAct agents. Cascades providers."""
-    # Try Groq first (best tool-call support with LangChain)
-    groq_configs = _get_groq_configs()
-    for _, api_key, model in groq_configs:
+    """
+    LangChain-compatible LLM for ReAct agents. Cascades providers.
+
+    CRITICAL: Only use models that support function/tool calling.
+    Groq's 8b and gemma2 models do NOT support tool calling and throw
+    'Failed to call a function / failed_generation' errors.
+    Safe tool-calling models: llama-3.3-70b (Groq), gpt-4o-mini (OpenAI), Llama-3.3-70b (Together).
+    """
+    # ── 1. Groq: ONLY the 70b model supports tool calling reliably ──────────
+    groq_keys = settings.all_groq_keys
+    tool_capable_groq_model = settings.groq_primary_model  # llama-3.3-70b-versatile only
+
+    for api_key in groq_keys:
         if api_key in _exhausted_keys:
             continue
         try:
             from langchain_groq import ChatGroq
-            return ChatGroq(model=model, api_key=api_key, temperature=temperature, max_retries=1)
+            llm = ChatGroq(
+                model=tool_capable_groq_model,
+                api_key=api_key,
+                temperature=temperature,
+                max_retries=0,  # Don't retry — rotate to next key instead
+            )
+            logger.info(f"[Tool LLM] Using Groq {tool_capable_groq_model}")
+            return llm
         except Exception as e:
-            logger.warning(f"[Tool LLM] Groq {model} failed: {e}")
+            logger.warning(f"[Tool LLM] Groq {tool_capable_groq_model} key failed: {str(e)[:80]}")
 
-    # Try OpenAI (also has excellent tool-call support)
+    # ── 2. OpenAI: gpt-4o-mini has excellent tool-call support ──────────────
     openai_key = getattr(settings, "openai_api_key", "")
     if openai_key and openai_key not in _exhausted_keys:
         try:
             from langchain_openai import ChatOpenAI
+            logger.info("[Tool LLM] Falling back to OpenAI gpt-4o-mini")
             return ChatOpenAI(model="gpt-4o-mini", api_key=openai_key, temperature=temperature)
         except ImportError:
-            pass
+            logger.warning("[Tool LLM] langchain_openai not installed")
         except Exception as e:
-            logger.warning(f"[Tool LLM] OpenAI failed: {e}")
+            logger.warning(f"[Tool LLM] OpenAI failed: {str(e)[:80]}")
 
-    raise RuntimeError("get_tool_llm: All providers exhausted.")
+    # ── 3. Together AI: Llama-3.3-70b supports tool calling ─────────────────
+    together_key = getattr(settings, "together_api_key", "")
+    if together_key and together_key not in _exhausted_keys:
+        try:
+            from langchain_openai import ChatOpenAI
+            logger.info("[Tool LLM] Falling back to Together AI Llama-3.3-70b")
+            return ChatOpenAI(
+                model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                api_key=together_key,
+                base_url="https://api.together.xyz/v1",
+                temperature=temperature,
+            )
+        except Exception as e:
+            logger.warning(f"[Tool LLM] Together AI failed: {str(e)[:80]}")
+
+    raise RuntimeError(
+        "get_tool_llm: All tool-capable providers exhausted. "
+        "Check your GROQ_API_KEY_1, OPENAI_API_KEY, or TOGETHER_API_KEY in .env"
+    )
 
 
 def get_llm_client():
