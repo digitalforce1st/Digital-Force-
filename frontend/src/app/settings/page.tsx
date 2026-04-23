@@ -618,14 +618,18 @@ export default function SettingsPage() {
                 const statusColor = {
                   connected: '#34D399',
                   connecting: '#FBBF24',
+                  browser_open: '#FBBF24',
                   needs_reauth: '#F87171',
                   failed: '#F87171',
+                  pending: 'rgba(255,255,255,0.3)',
                 }[acc.connection_status as string] || 'rgba(255,255,255,0.2)'
                 const statusLabel = {
                   connected: 'Connected',
                   connecting: 'Agent connecting...',
+                  browser_open: 'Browser open — awaiting login',
                   needs_reauth: 'Needs re-auth',
                   failed: 'Failed',
+                  pending: 'Pending authentication',
                 }[acc.connection_status as string] || acc.connection_status || 'Unknown'
 
                 return (
@@ -674,7 +678,10 @@ export default function SettingsPage() {
               })}
 
               {addingAccount && (
-                <div style={{ marginTop: 12, padding: '1rem', borderRadius: 12, background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)' }}>
+                <div style={{ marginTop: 12, padding: '1.25rem', borderRadius: 12, background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.15)' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'rgba(34,211,238,0.8)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Eye size={13} /> A browser window will open on your machine — just log in normally and click &quot;I have logged in&quot;.
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                       <div>
                         <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Platform</label>
@@ -697,21 +704,15 @@ export default function SettingsPage() {
                           style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none' }} />
                       </div>
                   </div>
-                  <div style={{ marginBottom: 10 }}>
+                  <div style={{ marginBottom: 14 }}>
                     <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Account Label (Internal)</label>
                     <input value={newAccount.account_label} onChange={e => setNewAccount(s => ({ ...s, account_label: e.target.value }))}
-                      placeholder="e.g. Burner 1, CEO Personal"
+                      placeholder="e.g. Brighton Personal, CEO Account"
                       style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none' }} />
-                  </div>
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Authentication / Truth Bucket (Free Text or JSON)</label>
-                    <textarea value={newAccount.auth_data} onChange={e => setNewAccount(s => ({ ...s, auth_data: e.target.value }))}
-                      placeholder="e.g. Email: user@acme.com&#10;Password: password123&#10;2FA Recovery: 123456" rows={3}
-                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 8, marginTop: 4, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', color: '#fff', fontSize: '0.85rem', outline: 'none', resize: 'vertical' }} />
                   </div>
                   {/* Inline error */}
                   {accountError && (
-                    <div style={{ padding: '0.6rem 0.875rem', borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5', fontSize: '0.8rem', marginBottom: 8 }}>
+                    <div style={{ padding: '0.6rem 0.875rem', borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5', fontSize: '0.8rem', marginBottom: 10 }}>
                       {accountError}
                     </div>
                   )}
@@ -719,19 +720,48 @@ export default function SettingsPage() {
                     <button onClick={() => { setAddingAccount(false); setAccountError('') }}
                       style={{ padding: '0.5rem 1rem', borderRadius: 8, background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>
                     <button
-                      onClick={handleAddAccount}
+                      onClick={async () => {
+                        if (!newAccount.platform) { setAccountError('Platform is required'); return }
+                        if (!newAccount.display_name) { setAccountError('Display Name is required'); return }
+                        if (!newAccount.account_label) { setAccountError('Account Label is required'); return }
+                        setIsSubmittingAccount(true)
+                        setAccountError('')
+                        try {
+                          // Step 1: Save to DB with pending status
+                          const res = await fetch(`${BASE}/api/accounts`, {
+                            method: 'POST',
+                            headers: authHeaders(),
+                            body: JSON.stringify({ ...newAccount, connection_status: 'pending' })
+                          })
+                          if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text()}`)
+                          const saved = await res.json()
+
+                          // Step 2: Refresh list
+                          const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+                          if (Array.isArray(fresh)) setAccounts(fresh)
+
+                          // Step 3: Immediately launch Ghost Auth modal for this new account
+                          setAddingAccount(false)
+                          setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
+                          handleGhostStart({ id: saved.id, platform: newAccount.platform })
+                        } catch (e: any) {
+                          setAccountError(e?.message || 'Failed to save — is your backend running?')
+                        } finally {
+                          setIsSubmittingAccount(false)
+                        }
+                      }}
                       disabled={isSubmittingAccount}
                       style={{
                         padding: '0.5rem 1.25rem', borderRadius: 8,
                         background: isSubmittingAccount ? 'rgba(6,182,212,0.4)' : 'linear-gradient(135deg,#06b6d4,#3b82f6)',
                         border: 'none', color: '#fff', fontSize: '0.85rem', fontWeight: 600,
                         cursor: isSubmittingAccount ? 'not-allowed' : 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 6, minWidth: 160,
+                        display: 'flex', alignItems: 'center', gap: 6,
                         opacity: isSubmittingAccount ? 0.8 : 1,
                       }}>
                       {isSubmittingAccount
-                        ? <><RefreshCw size={14} className="animate-spin" /> Connecting...</>
-                        : <><Zap size={14} /> Connect Account</>
+                        ? <><RefreshCw size={14} className="animate-spin" /> Saving...</>
+                        : <><Eye size={14} /> Save & Open Browser</>
                       }
                     </button>
                   </div>

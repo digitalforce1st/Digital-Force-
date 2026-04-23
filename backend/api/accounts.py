@@ -178,34 +178,44 @@ async def ghost_auth_start(account_id: str, db: AsyncSession = Depends(get_db), 
     Spins up a visible (headless=False) Playwright browser context specifically bound to this account's session.
     Navigates to the platform so the user can manually log in and complete 2FA.
     """
-    import asyncio
     from agent.browser.ghost import ghost
-    
+
     stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
     result = await db.execute(stmt)
     acc = result.scalar_one_or_none()
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    # Always ensure Ghost is running — safe to call multiple times
     if not ghost.is_running:
         await ghost.start()
 
+    if not ghost.is_running:
+        raise HTTPException(status_code=503, detail="Ghost Browser failed to start — ensure Playwright is installed (pip install playwright && playwright install chromium)")
+
     platform_urls = {
-        "facebook": "https://www.facebook.com/",
-        "instagram": "https://www.instagram.com/",
-        "twitter": "https://twitter.com/login",
-        "tiktok": "https://www.tiktok.com/login",
-        "linkedin": "https://www.linkedin.com/login",
-        "pinterest": "https://www.pinterest.com/login/"
+        "facebook":  "https://www.facebook.com/",
+        "instagram": "https://www.instagram.com/accounts/login/",
+        "twitter":   "https://twitter.com/login",
+        "tiktok":    "https://www.tiktok.com/login",
+        "linkedin":  "https://www.linkedin.com/login",
+        "youtube":   "https://accounts.google.com/signin",
+        "pinterest": "https://www.pinterest.com/login/",
     }
-    url = platform_urls.get(acc.platform.lower(), "https://google.com")
+    url = platform_urls.get(acc.platform.lower(), f"https://www.{acc.platform.lower()}.com/login")
 
     try:
         page = await ghost.get_page(account_id=acc.id, headless=False)
-        await page.goto(url)
-        return {"status": "browser_opened"}
+        await page.goto(url, wait_until="domcontentloaded")
+
+        # Mark the account as having an open browser session
+        acc.connection_status = "browser_open"
+        await db.commit()
+
+        return {"status": "browser_opened", "url": url}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Browser launch failed: {str(e)}")
+
 
 @router.post("/{account_id}/ghost-auth/verify")
 async def ghost_auth_verify(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
