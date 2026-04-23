@@ -171,3 +171,60 @@ Never store raw passwords in logs."""
         _logger.error(f"Failed to dispatch auth provision: {e}")
 
     return {"status": "provisioning", "goal_id": goal_id, "account_id": account_id}
+
+@router.post("/{account_id}/ghost-auth/start")
+async def ghost_auth_start(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
+    """
+    Spins up a visible (headless=False) Playwright browser context specifically bound to this account's session.
+    Navigates to the platform so the user can manually log in and complete 2FA.
+    """
+    import asyncio
+    from agent.browser.ghost import ghost
+    
+    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
+    result = await db.execute(stmt)
+    acc = result.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if not ghost.is_running:
+        await ghost.start()
+
+    platform_urls = {
+        "facebook": "https://www.facebook.com/",
+        "instagram": "https://www.instagram.com/",
+        "twitter": "https://twitter.com/login",
+        "tiktok": "https://www.tiktok.com/login",
+        "linkedin": "https://www.linkedin.com/login",
+        "pinterest": "https://www.pinterest.com/login/"
+    }
+    url = platform_urls.get(acc.platform.lower(), "https://google.com")
+
+    try:
+        page = await ghost.get_page(account_id=acc.id, headless=False)
+        await page.goto(url)
+        return {"status": "browser_opened"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{account_id}/ghost-auth/verify")
+async def ghost_auth_verify(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
+    """
+    Called when the user clicks 'I've Logged In'.
+    Closes the context securely (which flushes state to disk) and updates the DB connection status.
+    """
+    from agent.browser.ghost import ghost
+
+    stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
+    result = await db.execute(stmt)
+    acc = result.scalar_one_or_none()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Force close the browser context to ensure cookies are flushed to storage_state and release RAM
+    await ghost.close_context(acc.id)
+
+    acc.connection_status = "connected"
+    await db.commit()
+
+    return {"status": "success", "connection_status": "connected"}

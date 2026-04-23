@@ -135,6 +135,12 @@ export default function SettingsPage() {
   // WhatsApp Live Auth State
   const [waModalOpen, setWaModalOpen] = useState(false)
   const [waStatus, setWaStatus] = useState<any>(null)
+
+  // Ghost Browser Secure Auth Flow
+  const [ghostAuthId, setGhostAuthId] = useState<string | null>(null)
+  const [ghostAuthPlatform, setGhostAuthPlatform] = useState<string>('')
+  const [ghostAuthLoading, setGhostAuthLoading] = useState(false)
+
   const [waPolling, setWaPolling] = useState(false)
 
 
@@ -639,11 +645,11 @@ export default function SettingsPage() {
                           </button>
                         ) : (
                           <button
-                            onClick={() => handleProvisionAccount(acc.id)}
+                            onClick={() => handleGhostStart(acc)}
                             disabled={isConnecting}
                             style={{ display: 'flex', alignItems: 'center', gap: 6, background: isConnecting ? 'rgba(255,255,255,0.05)' : 'rgba(34,211,238,0.1)', border: `1px solid ${isConnecting ? 'rgba(255,255,255,0.08)' : 'rgba(34,211,238,0.2)'}`, color: isConnecting ? 'rgba(255,255,255,0.3)' : '#22D3EE', borderRadius: 6, padding: '0.3rem 0.7rem', fontSize: '0.75rem', cursor: isConnecting ? 'not-allowed' : 'pointer' }}>
                             <Zap size={12} />
-                            {isConnecting ? 'Connecting...' : acc.connection_status === 'connected' ? 'Re-connect' : 'Connect'}
+                            {acc.connection_status === 'connected' ? 'Re-Authenticate' : 'Authenticate'}
                           </button>
                         )}
                         <button onClick={() => handleDeleteAccount(acc.id)} style={{ background: 'none', border: 'none', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', padding: 4 }}>
@@ -1200,6 +1206,33 @@ export default function SettingsPage() {
                 <p style={{ fontSize: '0.7rem', opacity: 0.6 }}>(This can take up to 20 seconds)</p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Ghost Auth Overlay Modal ── */}
+      {ghostAuthId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
+          <div style={{ background: '#0F172A', padding: '2rem', borderRadius: 20, width: '100%', maxWidth: 450, border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', position: 'relative' }}>
+            <button onClick={() => { setGhostAuthId(null); setGhostAuthLoading(false) }} style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>
+              <X size={20} />
+            </button>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', border: '1px solid rgba(34,211,238,0.3)', animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}>
+                <Eye size={30} color="#22D3EE" />
+              </div>
+              <h2 style={{ fontSize: '1.25rem', color: '#fff', fontWeight: 700, margin: '0 0 8px 0' }}>Authenticating {ghostAuthPlatform}</h2>
+              <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', lineHeight: 1.5, margin: 0 }}>
+                A secure browser window has opened on your computer. Please switch to it, log in normally (including 2FA if needed), and click below when finished.
+              </p>
+            </div>
+            <button 
+              onClick={handleGhostVerify} 
+              disabled={ghostAuthLoading}
+              style={{ width: '100%', padding: '0.875rem', borderRadius: 12, background: '#22D3EE', color: '#0F172A', fontWeight: 600, fontSize: '0.9rem', border: 'none', cursor: ghostAuthLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: ghostAuthLoading ? 0.7 : 1 }}>
+              {ghostAuthLoading ? <RefreshCw size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
+              {ghostAuthLoading ? 'Freezing Cookie Vault...' : '✓ I have logged in'}
+            </button>
           </div>
         </div>
       )}

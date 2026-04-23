@@ -136,16 +136,18 @@ async def publisher_node(state: AgentState) -> dict:
 
     fleet_lines = []
     for platform in platforms_needed:
+        # Buffer API Pool Check
         creds = await get_credentials_for(platform=platform, user_id=user_id)
-        if creds:
-            labels = ", ".join(c["label"] for c in creds[:3])
-            fleet_lines.append(
-                f"{platform.upper()}: {len(creds)} Buffer account(s) available ({labels})"
-            )
-        else:
-            fleet_lines.append(
-                f"{platform.upper()}: No Buffer credentials — will use Ghost Browser fallback"
-            )
+        buffer_str = f"{len(creds)} Buffer account(s) [{', '.join(c['label'] for c in creds[:3])}]" if creds else "0 API accounts"
+        
+        # Ghost Swarm Target Accounts Check
+        ghost_accounts = await _get_accounts_for_platform(platform)
+        active_ghosts = [a for a in ghost_accounts if a.get("connection_status") == "connected"]
+        ghost_str = f"{len(active_ghosts)} authenticated Ghost profile(s) [{', '.join(a['display_name'] for a in active_ghosts[:3])}]" if active_ghosts else "0 Ghost profiles"
+
+        fleet_lines.append(
+            f"{platform.upper()}:\n      - API Routing: {buffer_str}\n      - Physical Swarm: {ghost_str}"
+        )
 
     if fleet_lines:
         fleet_summary_text = "\n".join(f"  - {line}" for line in fleet_lines)
@@ -169,22 +171,27 @@ async def publisher_node(state: AgentState) -> dict:
             
             llm = get_custom_llm(temperature=0.4)
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            strategy_reasoning = response.content.strip()
+            # We preserve this for the final return summary
+            strategy_reasoning = f"🧠 **Publisher Macro-Strategy:**\n{response.content.strip()}"
             
             await chat_push(
                 user_id=user_id,
-                content=f"🧠 **Publisher Macro-Strategy:**\n{strategy_reasoning}\n\n**Fleet Status:**\n{fleet_summary_text}",
+                content=f"{strategy_reasoning}\n\n**Fleet Status:**\n{fleet_summary_text}",
                 agent_name="publisher",
                 goal_id=goal_id,
             )
         except Exception as e:
             logger.warning(f"[Publisher] LLM Strategy formulation failed: {e}")
+            strategy_reasoning = ""
             await chat_push(
                 user_id=user_id,
                 content="Publishing fleet ready:\n" + fleet_summary_text,
                 agent_name="publisher",
                 goal_id=goal_id,
             )
+    else:
+        strategy_reasoning = ""
+        fleet_summary_text = "No target audiences/fleet profiles assigned."
 
     # ── Enqueue all jobs into the scheduler ────────────────────────────────
     total_enqueued = 0
@@ -245,6 +252,9 @@ async def publisher_node(state: AgentState) -> dict:
         f"Execution strategy: Buffer API first, Ghost Browser fallback. "
         + (f"{total_skipped} skipped (missing content)." if total_skipped else "")
     )
+    
+    # Pack the LLM strategy and fleet context for the orchestrator's awareness
+    full_orchestrator_summary = f"{summary}\n\n{strategy_reasoning}\n\nFleet Status:\n{fleet_summary_text}"
 
     await chat_push(
         user_id=user_id,
@@ -258,7 +268,7 @@ async def publisher_node(state: AgentState) -> dict:
         "failed_task_ids": failed_ids,
         "tasks": tasks,
         "next_agent": "orchestrator",
-        "messages": [{"role": "assistant", "name": "publisher", "content": summary}],
+        "messages": [{"role": "assistant", "name": "publisher", "content": full_orchestrator_summary}],
     }
 
 

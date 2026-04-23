@@ -56,7 +56,7 @@ async def get_profiles(access_token: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{BUFFER_API_BASE}/profiles.json",
-                params={"access_token": access_token},
+                headers={"Authorization": f"Bearer {access_token}"},
             )
             resp.raise_for_status()
             raw_profiles = resp.json()
@@ -128,7 +128,6 @@ async def post_to_buffer(
     # Build form-encoded data list (Buffer v1 uses form encoding, not JSON)
     data: list[tuple[str, str]] = []
 
-    data.append(("access_token", access_token))
     data.append(("text", content))
 
     # profile_ids[] as repeated params (Buffer's required multi-value format)
@@ -161,6 +160,7 @@ async def post_to_buffer(
         async with httpx.AsyncClient(timeout=BUFFER_TIMEOUT) as client:
             resp = await client.post(
                 f"{BUFFER_API_BASE}/updates/create.json",
+                headers={"Authorization": f"Bearer {access_token}"},
                 data=data,
             )
 
