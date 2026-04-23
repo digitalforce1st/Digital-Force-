@@ -547,9 +547,52 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 
 
 async def init_db():
-    """Create all tables on startup."""
+    """Create all tables on startup, then patch any missing columns (additive migrations)."""
     async with engine.begin() as conn:
+        # Create any tables that don't exist yet
         await conn.run_sync(Base.metadata.create_all)
+
+    # ── Additive column migrations ────────────────────────────────────────────
+    # These ADD COLUMN IF NOT EXISTS statements are idempotent — safe to run on
+    # every startup. Add new columns here whenever the ORM model grows.
+    migrations = [
+        # platform_connections — columns added after initial table creation
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS account_id VARCHAR(200)",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS api_key_encrypted TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS proxy_session_id VARCHAR(100)",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS web_username VARCHAR(200)",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS web_password_encrypted TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS extra_config TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS posts_per_day_limit INTEGER DEFAULT 10",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS preferred_post_times TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS error_message TEXT",
+        "ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMP",
+        # goals — extra columns
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS replan_count INTEGER DEFAULT 0",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS last_monitor_at TIMESTAMP",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS approval_token VARCHAR(255)",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS approval_notes TEXT",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS approved_by VARCHAR(36)",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS progress_percent FLOAT DEFAULT 0",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS tasks_total INTEGER DEFAULT 0",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS tasks_completed INTEGER DEFAULT 0",
+        "ALTER TABLE goals ADD COLUMN IF NOT EXISTS tasks_failed INTEGER DEFAULT 0",
+    ]
+
+    import logging
+    _logger = logging.getLogger(__name__)
+    async with engine.begin() as conn:
+        for sql in migrations:
+            try:
+                await conn.execute(__import__("sqlalchemy").text(sql))
+            except Exception as e:
+                _logger.debug(f"Migration skipped (likely already applied): {sql[:60]}... — {e}")
+
 
 
 async def get_db():
