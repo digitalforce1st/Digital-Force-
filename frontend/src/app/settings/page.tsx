@@ -564,7 +564,6 @@ export default function SettingsPage() {
                 { label: 'Groq 1', ok: llmStatus?.groq_1 },
                 { label: 'Groq 2', ok: llmStatus?.groq_2 },
                 { label: 'Groq 3', ok: llmStatus?.groq_3 },
-                { label: 'Buffer', ok: pubStatus?.buffer },
                 { label: 'Facebook', ok: pubStatus?.facebook },
               ].map(({ label, ok }) => (
                 <div key={label} style={{
@@ -597,125 +596,9 @@ export default function SettingsPage() {
         {/* ── Publishing Fleet ── */}
         {activeTab === 'publishing' && (
           <div>
-            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-              <div style={{ flex: 1, padding: '1rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Fleet Capacity</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 600, color: '#22D3EE' }}>{bufferFleetSummary?.total_daily_capacity || 0} <span style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.3)', fontWeight: 400 }}>posts/day</span></div>
-              </div>
-              <div style={{ flex: 1, padding: '1rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Posts Today</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 600, color: '#fff' }}>{bufferFleetSummary?.total_posts_today || 0}</div>
-              </div>
-              <div style={{ flex: 1, padding: '1rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Connected Profiles</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 600, color: '#fff' }}>{bufferFleetSummary?.total_profiles || 0}</div>
-              </div>
-            </div>
-
-            <Section title="Buffer API Credential Pool">
+            <Section title="Ghost Browser Swarm Target Accounts">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', maxWidth: '75%' }}>
-                  Paste your Buffer access tokens here. Digital Force will automatically sync connected profiles
-                  and load-balance thousands of posts across them to bypass API rate limits. 
-                </div>
-                <button onClick={() => {setAddingBuffer(true); setBufferStatusMsg('')}}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0.4rem 0.875rem',
-                    borderRadius: 8, background: 'rgba(34,211,238,0.15)', border: '1px solid rgba(34,211,238,0.25)',
-                    color: '#22D3EE', fontSize: '0.8rem', cursor: 'pointer' }}>
-                  <Plus size={13} /> Connect Buffer
-                </button>
-              </div>
-
-              {addingBuffer && (
-                <div style={{ padding: '1.25rem', borderRadius: 12, background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.2)', marginBottom: 16 }}>
-                  <h3 style={{ fontSize: '0.9rem', color: '#fff', marginBottom: 12, fontWeight: 600 }}>Connect Buffer Account</h3>
-                  <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>Label</label>
-                      <input value={newBufferLabel} onChange={e => setNewBufferLabel(e.target.value)} placeholder="e.g. Brighton Buffer A" style={{ width: '100%', padding: '0.6rem', borderRadius: 6, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '0.85rem', marginTop: 4, outline: 'none' }} />
-                    </div>
-                    <div style={{ flex: 2 }}>
-                      <label style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>Buffer Access Token</label>
-                      <input value={newBufferToken} onChange={e => setNewBufferToken(e.target.value)} type="password" placeholder="1/xxxxxxxx" style={{ width: '100%', padding: '0.6rem', borderRadius: 6, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', fontSize: '0.85rem', marginTop: 4, outline: 'none' }} />
-                    </div>
-                  </div>
-                  {bufferStatusMsg && <div style={{ fontSize: '0.8rem', color: bufferStatusMsg.includes('Success') ? '#34D399' : '#FC8181', marginBottom: 12 }}>{bufferStatusMsg}</div>}
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <button onClick={() => setAddingBuffer(false)} style={{ padding: '0.5rem 1rem', background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>
-                    <button onClick={async () => {
-                      if (!newBufferLabel || !newBufferToken) return
-                      setBufferStatusMsg('Connecting and syncing profiles...')
-                      try {
-                        const res = await fetch(`${BASE}/api/publishing-pool/connect`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ label: newBufferLabel, access_token: newBufferToken }) })
-                        const data = await res.json()
-                        if (res.ok) {
-                          setBufferStatusMsg(`Success: Synced ${data.profiles_connected} profiles!`)
-                          setTimeout(() => {
-                            setAddingBuffer(false); setNewBufferLabel(''); setNewBufferToken(''); setBufferStatusMsg('')
-                            fetch(`${BASE}/api/publishing-pool`, { headers: authHeaders() }).then(r => r.json()).then(setBufferAccounts).catch(()=>{})
-                            fetch(`${BASE}/api/publishing-pool/summary`, { headers: authHeaders() }).then(r => r.json()).then(setBufferFleetSummary).catch(()=>{})
-                          }, 1500)
-                        } else throw new Error(data.detail || 'Connection failed')
-                      } catch (e: any) { setBufferStatusMsg(`Error: ${e.message}`) }
-                    }} disabled={bufferStatusMsg === 'Connecting and syncing profiles...'}
-                    style={{ padding: '0.5rem 1rem', background: '#22D3EE', border: 'none', color: '#0F172A', fontWeight: 600, borderRadius: 6, fontSize: '0.8rem', cursor: 'pointer' }}>Connect & Sync</button>
-                  </div>
-                </div>
-              )}
-
-              {bufferAccounts.map(b => (
-                <div key={b.id} style={{ padding: '1rem', borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', marginBottom: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: b.status === 'active' ? '#34D399' : '#FC8181' }} />
-                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#fff' }}>{b.label}</span>
-                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>{b.connected_accounts.length} profile(s)</span>
-                      </div>
-                      <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>
-                        {b.connected_accounts.map((p: any) => `${p.account_name} (${p.platform})`).join(' · ')}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#fff' }}>{b.posts_today} / {b.daily_limit} posts today</div>
-                      <div style={{ width: 150, height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, marginTop: 4, overflow: 'hidden' }}>
-                        <div style={{ width: `${Math.min(100, b.utilization_pct)}%`, height: '100%', background: b.utilization_pct > 90 ? '#FC8181' : '#22D3EE' }} />
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 12, borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 12 }}>
-                    <button onClick={async () => {
-                      setBufferActionLoading(p => ({...p, [b.id]: true}))
-                      await fetch(`${BASE}/api/publishing-pool/${b.id}/verify`, { method: 'POST', headers: authHeaders() })
-                      fetch(`${BASE}/api/publishing-pool`, { headers: authHeaders() }).then(r => r.json()).then(setBufferAccounts)
-                      setBufferActionLoading(p => ({...p, [b.id]: false}))
-                    }} style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <ShieldCheck size={12} /> {bufferActionLoading[b.id] ? 'Verifying...' : 'Verify Token'}
-                    </button>
-                    <button onClick={async () => {
-                      setBufferActionLoading(p => ({...p, [b.id]: true}))
-                      await fetch(`${BASE}/api/publishing-pool/${b.id}/refresh`, { method: 'POST', headers: authHeaders() })
-                      fetch(`${BASE}/api/publishing-pool`, { headers: authHeaders() }).then(r => r.json()).then(setBufferAccounts)
-                      setBufferActionLoading(p => ({...p, [b.id]: false}))
-                    }} style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <RefreshCw size={12} /> Sync Profiles
-                    </button>
-                    <button onClick={async () => {
-                      if(confirm(`Remove ${b.label}?`)) {
-                        await fetch(`${BASE}/api/publishing-pool/${b.id}`, { method: 'DELETE', headers: authHeaders() })
-                        setBufferAccounts(prev => prev.filter(a => a.id !== b.id))
-                        fetch(`${BASE}/api/publishing-pool/summary`, { headers: authHeaders() }).then(r => r.json()).then(setBufferFleetSummary).catch(()=>{})
-                      }
-                    }} style={{ fontSize: '0.75rem', color: 'rgba(239,68,68,0.5)', background: 'none', border: 'none', cursor: 'pointer', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Trash2 size={12} /> Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </Section>
-            <Section title="Ghost Browser Target Accounts (Distribution Swarm Fallback)">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                 <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', maxWidth: '70%' }}>Add your target accounts here. The Distribution Manager will auto-provision proxies and route traffic.</div>
+                 <div style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', maxWidth: '70%' }}>Add your social accounts here. The Ghost Browser Swarm will authenticate once and post autonomously — no API keys needed, no rate limits.</div>
                  <button onClick={() => setAddingAccount(true)}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0.4rem 0.875rem',
                     borderRadius: 8, background: 'rgba(34,211,238,0.15)', border: '1px solid rgba(34,211,238,0.25)',

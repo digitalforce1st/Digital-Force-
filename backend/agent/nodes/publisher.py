@@ -94,7 +94,6 @@ async def publisher_node(state: AgentState) -> dict:
     """
     from agent.chat_push import chat_push, agent_thought_push
     from scheduler import scheduler
-    from agent.publishing.credential_pool import get_credentials_for
 
     goal_id = state.get("goal_id", "")
     user_id = state.get("created_by", "")
@@ -129,24 +128,20 @@ async def publisher_node(state: AgentState) -> dict:
         context=(
             f"Publisher activating for {len(post_tasks)} post(s) across "
             f"{len(platforms_needed)} platform(s): {', '.join(p.upper() for p in platforms_needed)}. "
-            f"Querying Buffer credential pool..."
+            f"Querying Ghost Browser cookie vault..."
         ),
         goal_id=goal_id,
     )
 
     fleet_lines = []
     for platform in platforms_needed:
-        # Buffer API Pool Check
-        creds = await get_credentials_for(platform=platform, user_id=user_id)
-        buffer_str = f"{len(creds)} Buffer account(s) [{', '.join(c['label'] for c in creds[:3])}]" if creds else "0 API accounts"
-        
         # Ghost Swarm Target Accounts Check
         ghost_accounts = await _get_accounts_for_platform(platform)
         active_ghosts = [a for a in ghost_accounts if a.get("connection_status") == "connected"]
         ghost_str = f"{len(active_ghosts)} authenticated Ghost profile(s) [{', '.join(a['display_name'] for a in active_ghosts[:3])}]" if active_ghosts else "0 Ghost profiles"
 
         fleet_lines.append(
-            f"{platform.upper()}:\n      - API Routing: {buffer_str}\n      - Physical Swarm: {ghost_str}"
+            f"{platform.upper()}:\n      - Physical Swarm: {ghost_str}"
         )
 
     if fleet_lines:
@@ -160,12 +155,11 @@ async def publisher_node(state: AgentState) -> dict:
             prompt = (
                 f"You are the 'Digital Force Publisher Director' agent.\n"
                 f"You have just received {len(post_tasks)} post task(s) to distribute.\n\n"
-                f"Here is your current Publishing Fleet (Buffer API Accounts + Fallbacks):\n"
+                f"Here is your current Publishing Fleet (Ghost Browser Cookie Vaults):\n"
                 f"{fleet_summary_text}\n\n"
                 f"Write a very brief (1-2 sentences) intelligent 'Distribution Strategy' note to the user. "
-                f"Explain how you plan to distribute these {len(post_tasks)} posts across the available fleet "
-                f"to balance load and avoid rate limits. If a platform has no Buffer API account, mention that "
-                f"you are authorizing the Ghost Browser swarm fallback. "
+                f"Explain how you plan to distribute these {len(post_tasks)} posts across the available Ghost Browser fleet "
+                f"to balance load. Mention that you are authorizing the Ghost Browser physical swarm. "
                 f"Sound elite, analytical, and highly intelligent."
             )
             
@@ -249,7 +243,7 @@ async def publisher_node(state: AgentState) -> dict:
     summary = (
         f"Enqueued {total_enqueued} post job(s) into the publishing queue. "
         f"Queue depth: {queue_depth}. "
-        f"Execution strategy: Buffer API first, Ghost Browser fallback. "
+        f"Execution strategy: Advanced Ghost Browser swarm. "
         + (f"{total_skipped} skipped (missing content)." if total_skipped else "")
     )
     
