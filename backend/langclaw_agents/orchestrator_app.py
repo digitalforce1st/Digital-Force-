@@ -57,6 +57,15 @@ async def retrieve_episodic_memory(goal_description: str, platform: str = "") ->
 # Each function is a clean, isolated call to a spoke agent.
 # It receives only the goal_id, reads from DB internally, and returns a status.
 
+async def dispatch_subconscious(user_id: str, chat_history: list, recent_campaigns: dict) -> dict:
+    """
+    Background worker process to synthesize ideas and plan proactively.
+    Currently a stub to prevent worker crashes while the logic is built out.
+    """
+    logger.info(f"[Orchestrator] Subconscious dispatch triggered for user {user_id}")
+    # TODO: Implement subconscious ideation (create draft goal / suggest concepts)
+    return {"status": "ok"}
+
 async def dispatch_researcher(goal_id: str, user_id: str, goal_description: str, platforms: list) -> dict:
     """Kick off the researcher spoke. It reads its own context from DB."""
     try:

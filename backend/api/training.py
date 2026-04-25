@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
 settings = get_settings()
 
+_active_tasks = set()
+
 UPLOAD_DIR = Path(settings.media_upload_dir)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -52,10 +54,15 @@ async def _process_knowledge_item(item_id: str, source_type: str, source_path: s
             tags=tags,
         )
 
+        logger.info(f"[Training] ingest complete for {item_id}, success: {result.get('success')}")
+
         async with async_session() as db:
+            logger.info(f"[Training] requesting db.get for {item_id}")
             item = await db.get(KI, item_id)
+            logger.info(f"[Training] db.get returned item: {bool(item)}")
             if item:
                 if result.get("success"):
+                    logger.info(f"[Training] trying to update indexed fields")
                     item.processing_status = "indexed"
                     item.qdrant_ids = json.dumps(result.get("qdrant_ids", []))
                     item.chunk_count = result.get("chunk_count", 0)
@@ -64,17 +71,29 @@ async def _process_knowledge_item(item_id: str, source_type: str, source_path: s
                 else:
                     item.processing_status = "failed"
                     item.error_message = result.get("error", "Unknown error")
+                logger.info(f"[Training] trying to commit to db")
                 await db.commit()
                 logger.info(f"[Training] Indexed {item.chunk_count} chunks for {item_id}")
+            else:
+                logger.error(f"[Training] ITEM {item_id} NOT FOUND IN DB!")
 
     except Exception as e:
-        logger.error(f"[Training] Processing failed for {item_id}: {e}")
+        logger.error(f"[Training] Processing failed for {item_id}: {repr(e)}")
         from database import async_session, KnowledgeItem as KI
         async with async_session() as db:
             item = await db.get(KI, item_id)
             if item:
                 item.processing_status = "failed"
                 item.error_message = str(e)
+                await db.commit()
+    except BaseException as e:
+        logger.error(f"[Training] FATAL UNHANDLED EXCEPTION for {item_id}: {repr(e)}")
+        from database import async_session, KnowledgeItem as KI
+        async with async_session() as db:
+            item = await db.get(KI, item_id)
+            if item:
+                item.processing_status = "failed"
+                item.error_message = "Task forcefully cancelled by server: " + repr(e)
                 await db.commit()
 
 
@@ -131,12 +150,14 @@ async def upload_knowledge(
         uploaded_by=user.get("sub"),
     )
     db.add(item)
-    await db.flush()
+    await db.commit()
 
-    background_tasks.add_task(
-        _process_knowledge_item, item_id, source_type, source_path,
-        item.title, category, tags_list
+    import asyncio
+    task = asyncio.create_task(
+        _process_knowledge_item(item_id, source_type, source_path, item.title, category, tags_list)
     )
+    _active_tasks.add(task)
+    task.add_done_callback(_active_tasks.discard)
 
     return {
         "id": item_id,

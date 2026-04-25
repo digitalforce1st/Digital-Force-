@@ -4,19 +4,25 @@ echo  Digital Force -- Full Stack Launcher
 echo ================================================
 echo.
 
-:: Force ALL build/temp/rust paths to D: drive
-set TEMP=D:\tmp
-set TMP=D:\tmp
-set PIP_CACHE_DIR=D:\pip-cache
-mkdir D:\tmp 2>nul
+:: Use system temp — D:\pip-cache was causing corruption issues
+set TEMP=%USERPROFILE%\AppData\Local\Temp
+set TMP=%USERPROFILE%\AppData\Local\Temp
+set PIP_NO_CACHE_DIR=1
 
 echo [1/3] Activating virtual environment...
 call "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\activate.bat"
 echo Done.
 
-echo [2/3] Checking for missing packages...
-"d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\pip.exe" install --no-cache-dir --only-binary=:all: -q -r "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\requirements.txt"
-echo Done.
+echo [2/3] Checking for missing packages (no cache, fast timeout)...
+"d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\venv\Scripts\pip.exe" ^
+    install --quiet --no-cache-dir --no-warn-script-location ^
+    --timeout=10 --retries=1 ^
+    -r "d:\KASHIRI BRIGHTON\BUSINESS\AiiA\Digital Force\backend\requirements.txt"
+if %ERRORLEVEL% EQU 0 (
+    echo Done.
+) else (
+    echo   Some packages failed - starting anyway with what is installed.
+)
 
 echo [3/3] Starting Ngrok in a separate window...
 set NGROK_AUTHTOKEN=3CTdhTZhb44Ddv3fw4DlQZRkjAs_2atEtEaWJKsbbMLaWbyu9

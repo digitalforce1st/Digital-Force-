@@ -1,16 +1,15 @@
 import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import text
+from database import engine, async_session, PlatformConnection
+from sqlalchemy import select
 
-async def main():
-    db_url = "postgresql+asyncpg://neondb_owner:npg_o0ndwfG9bDNq@ep-cool-surf-alid3jw5.c-3.eu-central-1.aws.neon.tech/neondb?ssl=require"
-    engine = create_async_engine(db_url)
-    async with engine.connect() as conn:
-        res = await conn.execute(text("SELECT user_id, autonomous_mode FROM agency_settings"))
-        print("agency_settings:", res.fetchall())
-        
-        res = await conn.execute(text("SELECT id, username FROM users"))
-        print("users:", res.fetchall())
+async def check():
+    async with async_session() as session:
+        stmt = select(PlatformConnection)
+        result = await session.execute(stmt)
+        accounts = result.scalars().all()
+        print(f"Total Accounts: {len(accounts)}")
+        for a in accounts:
+             print(f"- {a.id} | {a.display_name} | {a.platform} | {a.connection_status}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(check())

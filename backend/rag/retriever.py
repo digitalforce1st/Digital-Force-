@@ -27,12 +27,67 @@ def _get_client():
 
 def _get_embedder():
     """Return best available embedder. Never raises — stubs if nothing available."""
-    # 1. sentence-transformers (preferred)
+    # 1. Lightweight ONNX Embedder (preferred, no PyTorch required)
     try:
-        from sentence_transformers import SentenceTransformer
-        return SentenceTransformer("all-MiniLM-L6-v2")
-    except ImportError:
-        logger.warning("[RAG] sentence-transformers not installed.")
+        import numpy as np
+        from huggingface_hub import hf_hub_download
+        from tokenizers import Tokenizer
+        import onnxruntime as ort
+
+        class LightEmbedder:
+            def __init__(self, model_id="Xenova/all-MiniLM-L6-v2"):
+                # Uses cached versions if available; downloads (~90MB) on first run
+                self.tokenizer_path = hf_hub_download(repo_id=model_id, filename="tokenizer.json")
+                self.model_path = hf_hub_download(repo_id=model_id, filename="onnx/model_quantized.onnx")
+                
+                self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
+                self.tokenizer.enable_truncation(max_length=256)
+                self.tokenizer.enable_padding(pad_id=0, pad_token="[PAD]")
+                
+                # Suppress onnxruntime warnings
+                sess_options = ort.SessionOptions()
+                sess_options.log_severity_level = 3
+                self.session = ort.InferenceSession(self.model_path, sess_options=sess_options, providers=['CPUExecutionProvider'])
+
+            def encode(self, texts, **_):
+                if isinstance(texts, str):
+                    texts = [texts]
+                    
+                encodings = self.tokenizer.encode_batch(texts)
+                
+                input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+                attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+                token_type_ids = np.array([e.type_ids for e in encodings], dtype=np.int64)
+
+                inputs = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "token_type_ids": token_type_ids
+                }
+                
+                outputs = self.session.run(None, inputs)
+                token_embeddings = outputs[0]
+                
+                # Mean pooling
+                mask_expanded = np.expand_dims(attention_mask, -1)
+                sum_embeddings = np.sum(token_embeddings * mask_expanded, axis=1)
+                sum_mask = np.clip(np.sum(mask_expanded, axis=1), a_min=1e-9, a_max=None)
+                
+                embeddings = sum_embeddings / sum_mask
+                
+                # Normalize
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                embeddings = embeddings / norms
+                
+                # sentence-transformers natively returns a 1D numpy array for single strings, 
+                # or a 2D array for batches. We mimic that behavior here:
+                if len(texts) == 1:
+                    return embeddings[0]
+                return embeddings
+
+        return LightEmbedder()
+    except Exception as e:
+        logger.warning(f"[RAG] ONNX Embedder failed to load (downloads may be pending): {e}")
 
     # 3. Hash stub (no semantic quality — installs nothing)
     logger.warning("[RAG] Using hash stub embedder. Install sentence-transformers for real RAG.")
@@ -84,7 +139,8 @@ async def retrieve(
         }
         collection_name = collection_map.get(collection, settings.qdrant_knowledge_collection)
 
-        query_vector = embedder.encode(query).tolist()
+        raw_vec = embedder.encode(query)
+        query_vector = raw_vec.tolist() if hasattr(raw_vec, "tolist") else list(raw_vec)
 
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         qdrant_filter = None
@@ -95,7 +151,9 @@ async def retrieve(
             ]
             qdrant_filter = Filter(must=conditions) if conditions else None
 
-        results = client.search(
+        import asyncio
+        results = await asyncio.to_thread(
+            client.search,
             collection_name=collection_name,
             query_vector=query_vector,
             limit=top_k,
@@ -139,11 +197,14 @@ async def store(
         }
         collection_name = collection_map.get(collection, settings.qdrant_knowledge_collection)
 
-        vector = embedder.encode(text).tolist()
+        raw_vec = embedder.encode(text)
+        vector = raw_vec.tolist() if hasattr(raw_vec, "tolist") else list(raw_vec)
         pid = point_id or str(uuid.uuid4())
 
         payload = {"text": text, **metadata}
-        client.upsert(
+        import asyncio
+        await asyncio.to_thread(
+            client.upsert,
             collection_name=collection_name,
             points=[PointStruct(id=pid, vector=vector, payload=payload)]
         )
@@ -169,7 +230,8 @@ async def delete_points(
             "media": settings.qdrant_media_collection,
         }
         collection_name = collection_map.get(collection, settings.qdrant_knowledge_collection)
-        client.delete(collection_name=collection_name, points_selector=point_ids)
+        import asyncio
+        await asyncio.to_thread(client.delete, collection_name=collection_name, points_selector=point_ids)
         logger.info(f"[RAG] Deleted {len(point_ids)} points from {collection_name}")
     except Exception as e:
         logger.error("Failed to delete points from Qdrant: %s", str(e), exc_info=True)
@@ -184,10 +246,13 @@ async def ensure_collections():
         settings.qdrant_brand_collection,
         settings.qdrant_media_collection,
     ]
-    existing = {c.name for c in client.get_collections().collections}
+    import asyncio
+    existing_res = await asyncio.to_thread(client.get_collections)
+    existing = {c.name for c in existing_res.collections}
     for name in collections_to_create:
         if name not in existing:
-            client.create_collection(
+            await asyncio.to_thread(
+                client.create_collection,
                 collection_name=name,
                 vectors_config=VectorParams(size=settings.qdrant_dimension, distance=Distance.COSINE),
             )

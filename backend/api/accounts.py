@@ -25,10 +25,14 @@ class AccountUpdate(BaseModel):
 
 @router.get("/", response_model=List[dict])
 async def list_accounts(db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
-    stmt = select(PlatformConnection)
+    import logging
+    _logger = logging.getLogger(__name__)
+    user_id = current_user.get("sub")
+    # Filter by user_id so each user only sees their own accounts
+    stmt = select(PlatformConnection).where(PlatformConnection.user_id == user_id)
     result = await db.execute(stmt)
     accounts = result.scalars().all()
-    # Mask sensitive data inside auth_data if we wanted, but since it's the owner's dashboard we return it
+    _logger.info(f"[Accounts] Listing {len(accounts)} accounts for user {user_id}")
     out = []
     for a in accounts:
         out.append({
@@ -221,9 +225,11 @@ async def ghost_auth_start(account_id: str, db: AsyncSession = Depends(get_db), 
 async def ghost_auth_verify(account_id: str, db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
     """
     Called when the user clicks 'I've Logged In'.
-    Closes the context securely (which flushes state to disk) and updates the DB connection status.
+    Marks the account as connected in the DB first (so the UI updates even if the
+    browser close step fails), then safely releases the Playwright context.
     """
-    from agent.browser.ghost import ghost
+    import logging
+    _logger = logging.getLogger(__name__)
 
     stmt = select(PlatformConnection).where(PlatformConnection.id == account_id)
     result = await db.execute(stmt)
@@ -231,10 +237,22 @@ async def ghost_auth_verify(account_id: str, db: AsyncSession = Depends(get_db),
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # Force close the browser context to ensure cookies are flushed to storage_state and release RAM
-    await ghost.close_context(acc.id)
-
+    # ── Step 1: Commit the status update FIRST so it can never be rolled back ──
+    # We flush immediately so the DB record is durable before we touch the browser.
     acc.connection_status = "connected"
+    acc.is_enabled = True
     await db.commit()
+    _logger.info(f"[GhostAuth] Account {account_id} ({acc.display_name}) marked as connected")
+
+    # ── Step 2: Close the browser context (non-fatal if it fails) ─────────────
+    # Context may not be in memory if the server restarted between the
+    # browser open and verify steps — that's okay, the session cookies were
+    # already written to disk by Playwright's persistent context.
+    try:
+        from agent.browser.ghost import ghost
+        await ghost.close_context(acc.id)
+        _logger.info(f"[GhostAuth] Browser context released for {account_id}")
+    except Exception as e:
+        _logger.warning(f"[GhostAuth] Could not close browser context (non-fatal): {e}")
 
     return {"status": "success", "connection_status": "connected"}

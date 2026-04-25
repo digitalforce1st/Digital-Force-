@@ -542,6 +542,7 @@ engine = create_async_engine(
     settings.database_url,
     echo=False,  # Disabled to prevent massive terminal spam
     pool_pre_ping=True,
+    connect_args={"timeout": 60}
 )
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -592,6 +593,28 @@ async def init_db():
                 await conn.execute(__import__("sqlalchemy").text(sql))
             except Exception as e:
                 _logger.debug(f"Migration skipped (likely already applied): {sql[:60]}... — {e}")
+
+    # ── Data migration: backfill user_id on orphaned platform_connections ────
+    # Accounts created before user_id tracking was enforced will have NULL user_id.
+    # Assign them to the first user in the DB so they're not filtered out of the UI.
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                __import__("sqlalchemy").text("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+            )
+            first_user = result.fetchone()
+            if first_user:
+                first_user_id = first_user[0]
+                updated = await conn.execute(
+                    __import__("sqlalchemy").text(
+                        "UPDATE platform_connections SET user_id = :uid WHERE user_id IS NULL"
+                    ),
+                    {"uid": first_user_id}
+                )
+                if updated.rowcount:
+                    _logger.info(f"[Migration] Backfilled user_id={first_user_id} on {updated.rowcount} orphaned platform_connections")
+    except Exception as e:
+        _logger.warning(f"[Migration] Orphaned account backfill skipped: {e}")
 
 
 
