@@ -538,12 +538,34 @@ class ApiCredentialPool(Base):
 
 
 settings = get_settings()
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,  # Disabled to prevent massive terminal spam
+
+# ── Engine configuration ──────────────────────────────────────────────────────
+# pool_recycle=300 — forces connection refresh every 5 min, prevents
+#   asyncpg.exceptions.ConnectionDoesNotExistError from NeonDB serverless sleep.
+# pool_pre_ping=True — validates connections before use (already effective for
+#   most cases, but recycle catches connections that die mid-idle-period).
+# pool_size=5 / max_overflow=10 — keeps NeonDB connection count reasonable;
+#   the default pool_size=5, max_overflow=10 is fine for a single-server backend.
+_engine_kwargs = dict(
+    echo=False,
     pool_pre_ping=True,
-    connect_args={"timeout": 60}
+    pool_recycle=300,
 )
+
+# asyncpg (PostgreSQL) needs different connect_args from aiosqlite (SQLite)
+if "asyncpg" in settings.database_url or "postgresql" in settings.database_url:
+    _engine_kwargs["pool_size"]    = 5
+    _engine_kwargs["max_overflow"] = 10
+    _engine_kwargs["connect_args"] = {
+        "timeout": 30,           # asyncpg connection timeout
+        "command_timeout": 60,   # per-statement timeout
+        "server_settings": {"jit": "off"},  # disable JIT on NeonDB to prevent cold-start delays
+    }
+else:
+    # SQLite (aiosqlite) — no pool sizing, no connect_args
+    _engine_kwargs["connect_args"] = {"timeout": 60}
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

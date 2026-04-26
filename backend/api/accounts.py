@@ -23,16 +23,16 @@ class AccountUpdate(BaseModel):
     auth_data: Optional[str] = None
     is_enabled: Optional[bool] = None
 
-@router.get("/", response_model=List[dict])
+@router.get("", response_model=List[dict])
 async def list_accounts(db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
     import logging
     _logger = logging.getLogger(__name__)
     user_id = current_user.get("sub")
-    # Filter by user_id so each user only sees their own accounts
-    stmt = select(PlatformConnection).where(PlatformConnection.user_id == user_id)
+    # Return ALL accounts for any authenticated operator (single-agency platform)
+    stmt = select(PlatformConnection)
     result = await db.execute(stmt)
     accounts = result.scalars().all()
-    _logger.info(f"[Accounts] Listing {len(accounts)} accounts for user {user_id}")
+    _logger.info(f"[Accounts] Listing {len(accounts)} accounts (requested by user {user_id})")
     out = []
     for a in accounts:
         out.append({
@@ -197,7 +197,7 @@ async def ghost_auth_start(account_id: str, db: AsyncSession = Depends(get_db), 
     if not ghost.is_running:
         raise HTTPException(status_code=503, detail="Ghost Browser failed to start — ensure Playwright is installed (pip install playwright && playwright install chromium)")
 
-    platform_urls = {
+    PLATFORM_LOGIN_URLS = {
         "facebook":  "https://www.facebook.com/",
         "instagram": "https://www.instagram.com/accounts/login/",
         "twitter":   "https://twitter.com/login",
@@ -206,19 +206,31 @@ async def ghost_auth_start(account_id: str, db: AsyncSession = Depends(get_db), 
         "youtube":   "https://accounts.google.com/signin",
         "pinterest": "https://www.pinterest.com/login/",
     }
-    url = platform_urls.get(acc.platform.lower(), f"https://www.{acc.platform.lower()}.com/login")
+    url = PLATFORM_LOGIN_URLS.get(acc.platform.lower(), f"https://www.{acc.platform.lower()}.com/login")
 
     try:
         page = await ghost.get_page(account_id=acc.id, headless=False)
-        await page.goto(url, wait_until="domcontentloaded")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
         # Mark the account as having an open browser session
         acc.connection_status = "browser_open"
         await db.commit()
 
         return {"status": "browser_opened", "url": url}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Browser launch failed: {str(e)}")
+        import logging
+        logging.getLogger(__name__).error(
+            f"[GhostAuth] Browser launch failed for account {account_id} "
+            f"({acc.platform}): {type(e).__name__}: {e}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Browser launch failed ({type(e).__name__}): {str(e)}. "
+                   f"Ensure Playwright is installed: pip install playwright && playwright install chromium"
+        )
 
 
 @router.post("/{account_id}/ghost-auth/verify")

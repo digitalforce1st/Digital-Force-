@@ -1,26 +1,33 @@
 """
-Direct NeonDB diagnostic — checks what's in platform_connections right now.
+Check DB using psycopg2 (sync) - no event loop issues.
 """
-import asyncio
-import asyncpg
+import psycopg2
 
-DB_URL = "postgresql://neondb_owner:npg_o0ndwfG9bDNq@ep-cool-surf-alid3jw5.c-3.eu-central-1.aws.neon.tech/neondb"
+DB = "host=ep-cool-surf-alid3jw5.c-3.eu-central-1.aws.neon.tech dbname=neondb user=neondb_owner password=npg_o0ndwfG9bDNq sslmode=require"
 
-async def main():
-    conn = await asyncpg.connect(DB_URL, ssl="require")
-    
-    print("\n=== USERS ===")
-    users = await conn.fetch("SELECT id, username, email FROM users")
-    for u in users:
-        print(f"  {u['id']} | {u['username']} | {u['email']}")
+conn = psycopg2.connect(DB)
+cur = conn.cursor()
 
-    print("\n=== PLATFORM_CONNECTIONS ===")
-    rows = await conn.fetch("SELECT id, user_id, platform, display_name, connection_status, is_enabled FROM platform_connections")
-    if not rows:
-        print("  (empty — no accounts in DB)")
-    for r in rows:
-        print(f"  id={r['id'][:8]}... | user_id={str(r['user_id'])[:8] if r['user_id'] else 'NULL'} | {r['platform']} | {r['display_name']} | status={r['connection_status']} | enabled={r['is_enabled']}")
+print("\n=== USERS ===")
+cur.execute("SELECT id, username, email, role, full_name FROM users ORDER BY created_at")
+for row in cur.fetchall():
+    print(f"  id={row[0]}")
+    print(f"    user={row[1]}, email={row[2]}, role={row[3]}, name={row[4]}")
 
-    await conn.close()
+print("\n=== PLATFORM_CONNECTIONS ===")
+cur.execute("""
+    SELECT pc.id, pc.user_id, pc.platform, pc.display_name, pc.connection_status,
+           u.username, u.email, u.full_name
+    FROM platform_connections pc
+    LEFT JOIN users u ON pc.user_id = u.id
+    ORDER BY pc.created_at
+""")
+rows = cur.fetchall()
+if not rows:
+    print("  (empty)")
+for r in rows:
+    print(f"  {r[2]} | {r[3]} | status={r[4]}")
+    print(f"    -> user_id={r[1]} | {r[5]} ({r[6]}) name={r[7]}")
 
-asyncio.run(main())
+cur.close()
+conn.close()

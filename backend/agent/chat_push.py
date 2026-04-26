@@ -81,14 +81,10 @@ async def agent_thought_push(
     metadata: Optional[dict] = None,
 ) -> None:
     """
-    Rapidly uses a lightweight LLM to generate a dynamic, first-person thought
-    about what the agent is currently doing, then pushes it to the UI.
+    Push a direct agent status thought to the UI.
+    NO LLM CALL — uses the context string literally to avoid burning
+    rate-limited Groq tokens on status messages.
     """
-    from agent.llm import generate_completion
-    prompt = f"You are {agent_name.upper()}, an autonomous AI agent in the Digital Force network. You are currently: {context}. Give a dynamic, first-person present-tense thought (max 1 sentence) about what you are doing right now. NO hashtags, NO emojis, NO quotation marks, just raw telemetry thought."
-    try:
-        dynamic_thought = await generate_completion(prompt, temperature=0.3)
-        await chat_push(user_id, dynamic_thought.strip(' "').replace("\n", ""), agent_name, goal_id, metadata)
-    except Exception as e:
-        logger.warning(f"[ThoughtPush] Fast thought generation failed, falling back to context: {e}")
-        await chat_push(user_id, f"{agent_name.capitalize()}: Initializing {context}...", agent_name, goal_id, metadata)
+    agent_label = AGENT_META.get(agent_name, {}).get("label", agent_name.capitalize())
+    message = f"{agent_label}: {context}"
+    await chat_push(user_id, message, agent_name, goal_id, metadata)

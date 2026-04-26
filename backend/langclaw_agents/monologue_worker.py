@@ -156,13 +156,20 @@ async def _phase_execute_goals_parallel(now: datetime):
     from database import async_session, Goal
     from sqlalchemy import select
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(Goal).where(
-                Goal.status.in_(["planning", "executing", "awaiting_approval"])
-            ).limit(MAX_GOAL_BATCH)
-        )
-        goals = result.scalars().all()
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Goal).where(
+                    Goal.status.in_(["planning", "executing", "awaiting_approval"])
+                ).limit(MAX_GOAL_BATCH)
+            )
+            goals = result.scalars().all()
+    except Exception as e:
+        if "connection" in str(e).lower() or "getaddrinfo" in str(e):
+            logger.warning(f"[Monologue] DB connection asleep or dropped. Skipping cycle: {e}")
+            return
+        logger.error(f"[Monologue] DB error fetching goals: {e}")
+        return
 
     if not goals:
         return

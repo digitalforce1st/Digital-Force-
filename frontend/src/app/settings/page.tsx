@@ -171,7 +171,7 @@ export default function SettingsPage() {
       .then(setDaemonStatus)
       .catch(() => {})
 
-    fetch(`${BASE}/api/accounts`, { headers: authHeaders() })
+    fetch(`${BASE}/api/accounts`, { headers: authHeaders(), cache: 'no-store' })
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setAccounts(data) })
       .catch(() => {})
@@ -294,7 +294,7 @@ export default function SettingsPage() {
       console.log('[Connect Account] Saved, ID:', accountId)
 
       // Step 2: Refresh accounts list immediately
-      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders(), cache: 'no-store' }).then(r => r.json())
       if (Array.isArray(fresh)) setAccounts(fresh)
       setAddingAccount(false)
       setNewAccount({ platform: 'instagram', display_name: '', account_label: '', auth_data: '' })
@@ -319,7 +319,7 @@ export default function SettingsPage() {
         // Poll for status updates every 5 seconds
         const poll = setInterval(async () => {
           try {
-            const updated = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+            const updated = await fetch(`${BASE}/api/accounts`, { headers: authHeaders(), cache: 'no-store' }).then(r => r.json())
             if (Array.isArray(updated)) {
               setAccounts(updated)
               const thisAcc = updated.find((a: any) => a.id === accountId)
@@ -382,7 +382,7 @@ export default function SettingsPage() {
       })
       if (!res.ok) throw new Error(`Verification failed (${res.status})`)
       // Refresh the list — account should now show as 'connected'
-      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+      const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders(), cache: 'no-store' }).then(r => r.json())
       if (Array.isArray(fresh)) setAccounts(fresh)
       setGhostAuthId(null)
       setGhostAuthPlatform('')
@@ -780,7 +780,7 @@ export default function SettingsPage() {
                           const saved = await res.json()
 
                           // Step 2: Refresh list
-                          const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders() }).then(r => r.json())
+                          const fresh = await fetch(`${BASE}/api/accounts`, { headers: authHeaders(), cache: 'no-store' }).then(r => r.json())
                           if (Array.isArray(fresh)) setAccounts(fresh)
 
                           // Step 3: Immediately launch Ghost Auth modal for this new account

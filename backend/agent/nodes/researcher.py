@@ -109,20 +109,24 @@ Once you have explored enough data across your tools, stop calling tools. Your f
 }}
 """
 
-    agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
-    prompt = f"Goal: {goal}\nPlatforms: {platforms}"
-
+    # ── Both agent construction AND invocation are wrapped together ──────────
+    # create_react_agent() was previously outside any try/except. Any LangGraph
+    # version conflict, tool schema error, or LLM connection failure at
+    # construction time would propagate uncaught, causing dispatch_researcher
+    # to return {"status": "failed"} and triggering the infinite researcher loop.
     try:
+        agent = create_react_agent(llm, tools, state_modifier=SystemMessage(content=sys_prompt))
+        prompt_msg = f"Goal: {goal}\nPlatforms: {platforms}"
         final_state = await agent.ainvoke(
-            {"messages": [HumanMessage(content=prompt)]},
+            {"messages": [HumanMessage(content=prompt_msg)]},
             {"recursion_limit": 10}
         )
     except Exception as e:
-        logger.warning(f"[Researcher] ReAct loop failed: {e} — returning fallback research")
+        logger.warning(f"[Researcher] ReAct agent failed (construction or invocation): {e} — returning fallback research")
         findings = _build_fallback_research(goal, platforms)
         await agent_thought_push(
             user_id=user_id, agent_name="researcher",
-            context=f"research loop hit a limitation ({str(e)[:60]}), using synthesized context instead",
+            context=f"research tools unavailable ({type(e).__name__}), using synthesized market context instead",
             goal_id=goal_id,
         )
         return {
