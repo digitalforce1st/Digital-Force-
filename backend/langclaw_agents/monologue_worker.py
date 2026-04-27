@@ -243,11 +243,14 @@ async def _push_execution_status(goal):
     total = goal.tasks_total or 0
     if pct >= 100:
         msg = f"Campaign \"{goal.title}\" complete. All {total} tasks finished."
+    elif total == 0:
+        msg = f"Campaign \"{goal.title}\" is active. Initializing strategy and preparing tasks."
     else:
         msg = (
             f"Campaign \"{goal.title}\" running — {pct:.0f}% ({done}/{total} tasks). "
             f"Scheduler is distributing posts throughout the day."
         )
+    
     await chat_push(goal.created_by, msg, "monitor", goal.id)
 
 

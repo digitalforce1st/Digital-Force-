@@ -166,9 +166,9 @@ export default function TasksPage() {
                               <StatusIcon size={11} style={{ flexShrink: 0 }} />
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{goal.latest_activity || s.label}</span>
                             </span>
-                            {goal.platforms.slice(0, 4).map(p => (
+                            {(Array.isArray(goal.platforms) ? goal.platforms : []).slice(0, 4).map(p => (
                               <span key={p} style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', color: '#64748B', letterSpacing: '0.04em' }}>
-                                {PLATFORM_LABELS[p] || p.toUpperCase().slice(0, 2)}
+                                {PLATFORM_LABELS[p] || (typeof p === 'string' ? p.toUpperCase().slice(0, 2) : 'UNK')}
                               </span>
                             ))}
                             {goal.deadline && (
@@ -182,10 +182,10 @@ export default function TasksPage() {
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                             <div className="progress-bar" style={{ flex: 1 }}>
-                              <div className="progress-fill" style={{ width: `${goal.progress_percent}%` }} />
+                              <div className="progress-fill" style={{ width: `${goal.progress_percent || 0}%` }} />
                             </div>
                             <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 600, flexShrink: 0, letterSpacing: '0.04em' }}>
-                              {goal.tasks_completed}/{goal.tasks_total} OPS
+                              {goal.tasks_completed || 0}/{goal.tasks_total || 0} OPS
                             </span>
                           </div>
                         </div>

@@ -242,13 +242,15 @@ async def _evaluate_state_and_decide(
         available_actions.append(f"\"DISPATCH_PUBLISHER\": Publish {post_pending} ready post(s) to social platforms.")
     if failed_ids:
         available_actions.append(f"\"DISPATCH_SKILLFORGE\": Auto-heal {len(failed_ids)} failed task(s) or handle authentication.")
+    
+    available_actions.append("\"DISPATCH_MONITOR\": Compile progress analytics and KPI snapshot. Use periodically to monitor execution health.")
     available_actions.append("\"COMPLETE\": All work is done. Use only when tasks completed == tasks generated.")
 
     actions_block = "\n    ".join(f"- {a}" for a in available_actions)
 
     prompt = f"""
     You are the Digital Force Hub Supervisor — an autonomous AI swarm director.
-    Your mission: intelligently decide which specialist agent to activate next.
+    Your mission is to intelligently decide which specialist agent to activate next based on the goal.
 
     GOAL: {goal_desc}
     PLATFORMS: {platforms}
@@ -258,20 +260,24 @@ async def _evaluate_state_and_decide(
     LIVE STATE:
     - Research gathered: {bool(research)} | Topics found: {len(research.get('trending_topics', []))}
     - Campaign tasks created: {len(tasks)}
-    - Completed: {len(completed_ids)} | Failed: {len(failed_ids)}
+    - Completed tasks: {len(completed_ids)} | Failed tasks: {len(failed_ids)}
     - Pending content generation: {gen_pending}
     - Pending publishing: {post_pending}
     - Phases already dispatched this run: {list(completed_phases)}
 
-    Pending task preview: {pending_tasks}
-
     AVAILABLE ACTIONS (only these, based on current state):
     {actions_block}
 
-    Think step by step about what the swarm needs most right now to make progress.
+    CRITICAL ROUTING INTELLIGENCE:
+    1. If the goal is a simple, direct instruction (e.g., "Post this banner on LinkedIn", "Reply to this email"), DO NOT dispatch the Researcher or Strategist. Skip directly to DISPATCH_CONTENT_DIRECTOR (to write the caption) or DISPATCH_PUBLISHER (to post it).
+    2. If the goal is a complex, multi-week campaign, you MUST dispatch the Researcher first, then the Strategist.
+    3. Do not dispatch an agent if their phase is in 'Phases already dispatched this run'.
+    4. You are not a rigid state machine. Evaluate the actual text of the GOAL to determine if research or a full multi-task strategy plan is actually required.
+    5. If no tasks exist yet, and the goal is simple, dispatch the STRATEGIST but tell it to keep it simple, OR if content is already provided in the goal, you may need the Strategist to just format it into a task for the Publisher. Note: The Content Director and Publisher ONLY work if tasks exist in the task list. If tasks=0, you MUST use the STRATEGIST to create the execution tasks, but your reasoning should reflect why it's a quick plan vs a complex one.
+
     Return ONLY valid JSON:
     {{
-        "reasoning": "concise step-by-step analysis of current state and what is needed",
+        "reasoning": "Step-by-step analysis of the GOAL complexity, current state, and why the chosen action is the absolute best next step.",
         "action": "DISPATCH_RESEARCHER|DISPATCH_STRATEGIST|DISPATCH_CONTENT_DIRECTOR|DISPATCH_PUBLISHER|DISPATCH_SKILLFORGE|COMPLETE"
     }}
     """
@@ -426,6 +432,51 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
                     break
                 elif res.get("status") == "ok":
                     failed_ids = list(set(res.get("failed_task_ids", [])))
+
+            elif action == "DISPATCH_MONITOR":
+                from agent.nodes.monitor import monitor_node
+                from agent.state import AgentState
+                slim_state: AgentState = {
+                    "goal_id": goal_id, "goal_description": goal_description,
+                    "created_by": user_id, "platforms": platforms,
+                    "messages": [], "research_findings": research_findings,
+                    "campaign_plan": campaign_plan, "tasks": tasks,
+                    "completed_task_ids": completed_ids, "failed_task_ids": failed_ids,
+                    "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
+                    "human_feedback": None, "new_skills_created": [], "next_agent": None,
+                    "target_agent": None, "risk_score": None, "error": None,
+                    "iteration_count": iteration, "asset_ids": asset_ids, "deadline": None,
+                    "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
+                    "current_task_id": None,
+                }
+                res = await monitor_node(slim_state)
+                completed_phases.add("DISPATCH_MONITOR")
+                # Monitor could request a replan
+                if res.get("needs_replan"):
+                    completed_phases.discard("DISPATCH_STRATEGIST") # Allow strategist to run again
+
+            elif action == "DISPATCH_MONITOR":
+                from agent.nodes.monitor import monitor_node
+                from agent.state import AgentState
+                slim_state: AgentState = {
+                    "goal_id": goal_id, "goal_description": goal_description,
+                    "created_by": user_id, "platforms": platforms,
+                    "messages": [], "research_findings": research_findings,
+                    "campaign_plan": campaign_plan, "tasks": tasks,
+                    "completed_task_ids": completed_ids, "failed_task_ids": failed_ids,
+                    "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
+                    "human_feedback": None, "new_skills_created": [], "next_agent": None,
+                    "target_agent": None, "risk_score": None, "error": None,
+                    "iteration_count": iteration, "asset_ids": asset_ids, "deadline": None,
+                    "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
+                    "current_task_id": None,
+                }
+                res = await monitor_node(slim_state)
+                completed_phases.add("DISPATCH_MONITOR")
+                # Monitor could request a replan
+                if res.get("needs_replan"):
+                    completed_phases.discard("DISPATCH_STRATEGIST") # Allow strategist to run again
+                    logger.info("[Orchestrator Hub] Monitor requested replan.")
 
             elif action == "COMPLETE":
                 final_status = "completed"

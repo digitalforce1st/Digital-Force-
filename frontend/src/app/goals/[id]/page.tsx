@@ -250,7 +250,7 @@ export default function GoalDetailPage() {
             )}
 
             {/* Campaign task list */}
-            {goal.plan?.tasks && goal.plan.tasks.length > 0 && !needsApproval && (
+            {goal.plan?.tasks && Array.isArray(goal.plan.tasks) && goal.plan.tasks.length > 0 && !needsApproval && (
               <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                 style={{ borderRadius: '1rem', overflow: 'hidden', background: 'linear-gradient(135deg, rgba(15,23,42,0.65) 0%, rgba(15,23,42,0.25) 100%)', border: '1px solid rgba(255,255,255,0.04)' }}>
                 <button onClick={() => setShowPlan(p => !p)}
@@ -268,8 +268,8 @@ export default function GoalDetailPage() {
                   {showPlan && (
                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                       style={{ borderTop: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden' }}>
-                      {goal.plan.tasks.slice(0, 20).map((task, i) => (
-                        <div key={task.id || i} style={{
+                      {goal.plan.tasks.slice(0, 20).map((task: any, i: number) => (
+                        <div key={task?.id || i} style={{
                           padding: '0.875rem 1.5rem', display: 'flex', alignItems: 'flex-start', gap: '1rem',
                           borderBottom: i < Math.min(goal.plan!.tasks!.length, 20) - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
                         }}>
@@ -277,13 +277,13 @@ export default function GoalDetailPage() {
                             <span style={{ fontSize: '0.6rem', fontWeight: 900, color: '#33BAFF' }}>{i + 1}</span>
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: '0.85rem', color: '#CBD5E1', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 5 }}>{task.title}</div>
+                            <div style={{ fontSize: '0.85rem', color: '#CBD5E1', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 5 }}>{task?.title || task?.description || 'Task'}</div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(0,163,255,0.08)', color: '#33BAFF', letterSpacing: '0.04em' }}>
-                                {task.platform?.toUpperCase()}
+                                {(task?.platform || 'UNK').toUpperCase()}
                               </span>
                               <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.04)', color: '#64748B', letterSpacing: '0.03em' }}>
-                                {task.content_type}
+                                {task?.content_type || task?.task_type || 'post'}
                               </span>
                               {task.scheduled_at && (
                                 <span style={{ fontSize: '0.65rem', color: '#334155', fontWeight: 600 }}>

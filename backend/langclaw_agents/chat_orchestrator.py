@@ -369,9 +369,24 @@ CRITICAL OPERATING RULES:
                 from agent.llm import _exhausted_keys
                 # Extract the API key from the current LLM instance if possible
                 try:
-                    bad_key = llm.bound.api_key  # ChatGroq stores api_key here
-                    _exhausted_keys.add(bad_key)
-                    logger.info(f"[StreamOrchestrator] Marked Groq key exhausted for tool calls, retrying...")
+                    # Safely drill down into the bound ChatGroq object
+                    bound_llm = getattr(llm, "bound", llm)
+                    
+                    # Try getting api_key directly or via __dict__ to avoid strict Pydantic checks
+                    bad_key = getattr(bound_llm, "api_key", None)
+                    if not bad_key and hasattr(bound_llm, "__dict__"):
+                         bad_key = bound_llm.__dict__.get("api_key")
+                         
+                    # For SecretStr in Pydantic v2
+                    if bad_key and hasattr(bad_key, "get_secret_value"):
+                        bad_key = bad_key.get_secret_value()
+                        
+                    if bad_key:
+                        _exhausted_keys.add(bad_key)
+                        logger.info(f"[StreamOrchestrator] Marked Groq key {str(bad_key)[:8]}... exhausted for tool calls, retrying...")
+                    else:
+                        logger.warning(f"[StreamOrchestrator] Could not extract API key from LLM to mark exhausted. Rotating anyway.")
+                        
                     llm = get_tool_llm(temperature=0.2).bind_tools(tools)
                     continue  # retry this loop iteration with new LLM
                 except Exception as rotate_err:

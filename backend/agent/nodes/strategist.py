@@ -99,18 +99,13 @@ RESEARCH FINDINGS:
 
     try:
         final_state = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]}, {"recursion_limit": 5})
-    except Exception as e:
-        logger.error(f"[Strategist ReAct] Crashed: {e}")
-        return {"error": str(e), "next_agent": "orchestrator"}
+        messages = final_state.get("messages", [])
+        output = ""
+        for msg in reversed(messages):
+            if msg.type == "ai" and msg.content:
+                output = msg.content
+                break
 
-    messages = final_state.get("messages", [])
-    output = ""
-    for msg in reversed(messages):
-        if msg.type == "ai" and msg.content:
-            output = msg.content
-            break
-
-    try:
         # Strict fallback matching
         match = re.search(r'\{.*\}', output, re.DOTALL)
         if match:
@@ -134,8 +129,40 @@ RESEARCH FINDINGS:
             "campaign_plan": plan,
             "tasks": tasks,
             "messages": [{"role": "assistant", "name": "strategist", "content": f"Plan created: {len(tasks)} tasks"}],
-            "next_agent": "orchestrator", # Replaced legacy manager
+            "next_agent": "orchestrator",
         }
     except Exception as e:
-        logger.error(f"[Strategist] Parse Error: {e}\nRaw: {output[:300]}")
-        return {"error": str(e), "next_agent": "orchestrator"}
+        logger.error(f"[Strategist] ReAct or Parse Error: {e}. Falling back to synthetic plan generation.")
+        
+        # SYNTHETIC FALLBACK PLAN: Ensures the orchestrator loop NEVER stalls due to an LLM crash.
+        fallback_tasks = []
+        platforms = state.get("platforms") or ["linkedin"]
+        for idx, plat in enumerate(platforms):
+            fallback_tasks.append({
+                "id": f"task_fallback_{idx}",
+                "task_type": "generate_content",
+                "platform": plat,
+                "description": f"Create standard content for {plat}",
+                "content_brief": {"key_message": state.get("goal_description", "Standard campaign execution"), "tone": "professional"}
+            })
+            
+        fallback_plan = {
+            "campaign_name": "Emergency Fallback Plan",
+            "duration_days": 7,
+            "tasks": fallback_tasks,
+            "reasoning": "Standard execution generated due to strategic analysis node failure."
+        }
+        
+        await agent_thought_push(
+            user_id=user_id,
+            context="research tools unavailable, generated synthesized baseline campaign tasks",
+            agent_name="strategist",
+            goal_id=goal_id,
+        )
+
+        return {
+            "campaign_plan": fallback_plan,
+            "tasks": fallback_tasks,
+            "messages": [{"role": "assistant", "name": "strategist", "content": f"Fallback Plan created: {len(fallback_tasks)} tasks"}],
+            "next_agent": "orchestrator",
+        }
