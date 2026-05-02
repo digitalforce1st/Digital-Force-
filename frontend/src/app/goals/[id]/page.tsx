@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import VoiceInterface from '@/components/VoiceInterface'
 import Link from 'next/link'
@@ -66,7 +66,8 @@ interface AgentLogEntry {
 type Goal = ApiGoal
 
 export default function GoalDetailPage() {
-  const { id } = useParams() as { id: string }
+  const pathname = usePathname()
+  const id = pathname.split('/')[2] // extract from /goals/uuid
   const [goal, setGoal] = useState<Goal | null>(null)
   const [logs, setLogs] = useState<AgentLogEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -94,6 +95,7 @@ export default function GoalDetailPage() {
 
   const fetchGoal = async () => {
     try {
+      if (!id || id === 'default') return
       const data = await api.goals.get(id)
       setGoal(data)
       setLogs(data.agent_logs || [])
@@ -108,6 +110,7 @@ export default function GoalDetailPage() {
 
   // SSE for live logs
   useEffect(() => {
+    if (!id || id === 'default') return
     const token = getToken()
     const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     const url = `${BASE}/api/stream/goals/${id}${token ? `?token=${token}` : ''}`

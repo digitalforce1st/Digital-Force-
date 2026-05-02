@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import {
   CheckCircle2, XCircle, ArrowLeft, Clock, AlertCircle,
@@ -20,9 +20,9 @@ const CONTENT_TYPE_COLORS: Record<string, string> = {
 }
 
 export default function ApprovePage() {
-  const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
-  const goalId = params.id as string
+  const goalId = pathname.split('/')[2] // extract from /goals/uuid/approve
 
   const [goal, setGoal] = useState<Goal | null>(null)
   const [loading, setLoading] = useState(true)
