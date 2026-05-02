@@ -2,6 +2,24 @@
 Digital Force — Main FastAPI Application
 """
 
+# ── LangSmith: must be configured BEFORE any langchain imports ──────────────
+import os as _os
+import dotenv as _dotenv
+_dotenv.load_dotenv()  # Ensure .env is loaded early
+_ls_key     = _os.getenv("LANGCHAIN_API_KEY", "")
+_ls_tracing = _os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+_ls_project = _os.getenv("LANGCHAIN_PROJECT", "digital-force")
+if _ls_key and _ls_key != "REPLACE_WITH_YOUR_LANGSMITH_KEY":
+    _os.environ["LANGCHAIN_TRACING_V2"]  = "true"
+    _os.environ["LANGCHAIN_API_KEY"]     = _ls_key
+    _os.environ["LANGCHAIN_PROJECT"]     = _ls_project
+    _os.environ["LANGCHAIN_ENDPOINT"]    = "https://api.smith.langchain.com"
+    _LANGSMITH_ACTIVE = True
+else:
+    _os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    _LANGSMITH_ACTIVE = False
+# ────────────────────────────────────────────────────────────────────────────
+
 import sys
 import asyncio
 from typing import Set
@@ -74,6 +92,11 @@ async def lifespan(app: FastAPI):
 
     active_keys = len(settings.all_groq_keys)
     logger.info(f"🧠 LLM: {active_keys} Groq key(s) configured — {active_keys * 100_000:,} tokens/day capacity")
+
+    if _LANGSMITH_ACTIVE:
+        logger.info(f"🔭 LangSmith tracing ACTIVE — project: '{_ls_project}' → https://smith.langchain.com")
+    else:
+        logger.warning("🔭 LangSmith tracing DISABLED — add LANGCHAIN_API_KEY to .env to enable")
 
     # ── BACKGROUND: Heavy non-blocking initialization ────────────────────────
     # Fire as a background task BEFORE yield so it starts immediately

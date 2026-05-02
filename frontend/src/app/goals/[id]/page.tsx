@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import VoiceInterface from '@/components/VoiceInterface'
@@ -9,10 +9,21 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle2, XCircle, Clock, Activity, AlertCircle,
   ArrowLeft, Bot, Loader2, ChevronDown, ChevronUp,
-  Target, Calendar, Zap, TrendingUp
+  Target, Calendar, Zap, TrendingUp, Network,
 } from 'lucide-react'
 import api, { Goal as ApiGoal } from '@/lib/api'
 import { getToken } from '@/lib/auth'
+import dynamic from 'next/dynamic'
+
+// Dynamic import so React Flow only loads client-side (no SSR)
+const SwarmGraph = dynamic(
+  () => import('@/components/SwarmGraph').then(m => m.SwarmGraph),
+  { ssr: false, loading: () => (
+    <div style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+      <span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" />
+    </div>
+  )}
+)
 
 const AGENT_COLORS: Record<string, string> = {
   orchestrator:     '#F59E0B',
@@ -62,7 +73,24 @@ export default function GoalDetailPage() {
   const [approving, setApproving] = useState(false)
   const [notes, setNotes] = useState('')
   const [showPlan, setShowPlan] = useState(true)
+  const [showSwarm, setShowSwarm] = useState(true)
   const logsEndRef = useRef<HTMLDivElement>(null)
+  const swarmContainerRef = useRef<HTMLDivElement>(null)
+  const [swarmSize, setSwarmSize] = useState({ width: 700, height: 440 })
+
+  // Measure swarm container so graph fills it exactly
+  useEffect(() => {
+    const el = swarmContainerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect
+        if (width > 100 && height > 100) setSwarmSize({ width, height })
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const fetchGoal = async () => {
     try {
@@ -185,6 +213,58 @@ export default function GoalDetailPage() {
                 <span style={{ color: '#475569' }}>{goal.tasks_total - goal.tasks_completed - (goal.tasks_failed || 0)} PENDING</span>
                 {(goal.tasks_failed || 0) > 0 && <span style={{ color: '#F87171' }}>{goal.tasks_failed} FAILED</span>}
               </div>
+            </motion.div>
+
+            {/* ── Swarm Graph ── */}
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+              style={{ borderRadius: '1rem', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(8,11,18,0.6)' }}>
+              {/* Header */}
+              <button
+                onClick={() => setShowSwarm(s => !s)}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center',
+                  justifyContent: 'space-between', padding: '1.125rem 1.5rem',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  borderBottom: showSwarm ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Network size={15} style={{ color: '#8B5CF6' }} />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#E2E8F0', letterSpacing: '0.02em' }}>Swarm Graph</span>
+                  <span style={{
+                    fontSize: '0.6rem', fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                    background: isActive ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.05)',
+                    color: isActive ? '#8B5CF6' : '#475569',
+                    letterSpacing: '0.06em',
+                  }}>LIVE</span>
+                </div>
+                {showSwarm ? <ChevronUp size={15} style={{ color: '#475569' }} /> : <ChevronDown size={15} style={{ color: '#475569' }} />}
+              </button>
+
+              <AnimatePresence>
+                {showSwarm && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    <div
+                      ref={swarmContainerRef}
+                      style={{ width: '100%', height: 460 }}
+                    >
+                      <SwarmGraph
+                        goalId={id}
+                        goalStatus={goal.status}
+                        width={swarmSize.width}
+                        height={swarmSize.height}
+                        style={{ borderRadius: 0, border: 'none', width: '100%', height: '100%' }}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
 
             {/* Authorization panel */}

@@ -34,6 +34,17 @@ from config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# ── LangSmith tracing — graceful no-op if SDK not installed ─────────────────
+try:
+    from langsmith import traceable as _traceable
+except ImportError:
+    def _traceable(*args, **kwargs):
+        """No-op if langsmith not installed."""
+        def _decorator(fn):
+            return fn
+        return _decorator if args and callable(args[0]) else _decorator
+_traceable = _traceable  # re-export
+
 # ── Session-level exhausted key tracking ────────────────────────────────────
 _exhausted_keys: set[str] = set()
 
@@ -123,6 +134,7 @@ def _get_full_cascade():
     return cascade
 
 
+@_traceable(name="llm_invoke", run_type="llm")
 async def _invoke_provider(provider: str, api_key: str, model: str, messages: list, temperature: float, max_tokens: int) -> str:
     """Universal provider invoker — handles Groq, OpenAI, Together, Gemini APIs."""
     no_asterisk = "\n\nNever use markdown asterisks (**bold** or *italic*) in your response. Plain text only."
@@ -244,6 +256,7 @@ async def _stream_provider(provider: str, api_key: str, model: str, messages: li
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+@_traceable(name="generate_completion", run_type="chain")
 async def generate_completion(
     prompt: str,
     system_prompt: str = "",
@@ -310,6 +323,7 @@ async def generate_completion_batch(
     return [r if isinstance(r, str) else f"ERROR: {r}" for r in results]
 
 
+@_traceable(name="generate_json", run_type="chain")
 async def generate_json(prompt: str, system_prompt: str = "", prefer_reasoning: bool = False) -> dict:
     sys = (system_prompt or "") + "\n\nRESPOND WITH VALID JSON ONLY. No markdown fences, no explanation."
     raw = await generate_completion(prompt, sys, temperature=0.3)

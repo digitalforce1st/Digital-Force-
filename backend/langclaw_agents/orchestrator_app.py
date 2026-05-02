@@ -24,6 +24,16 @@ import uuid
 from typing import Optional
 from pathlib import Path
 
+# ── LangSmith tracing — graceful no-op if SDK not installed ────────────────
+try:
+    from langsmith import traceable as _traceable
+except ImportError:
+    def _traceable(*args, **kwargs):
+        def _decorator(fn):
+            return fn
+        return _decorator if args and callable(args[0]) else _decorator
+# ────────────────────────────────────────────────────────────────────────────
+
 logger = logging.getLogger(__name__)
 
 _SKILL_FILE = Path(__file__).parent.parent / "skills" / "orchestrator_skill.md"
@@ -207,6 +217,7 @@ async def dispatch_skillforge(goal_id, user_id, tasks, failed_task_ids, goal_des
 # which is not "hardcoding" — it's giving the LLM correct facts so it can
 # make genuinely intelligent forward-looking decisions.
 
+@_traceable(name="god_node_evaluate", run_type="chain")
 async def _evaluate_state_and_decide(
     goal_desc: str,
     platforms: list,
@@ -269,16 +280,15 @@ async def _evaluate_state_and_decide(
     {actions_block}
 
     CRITICAL ROUTING INTELLIGENCE:
-    1. If the goal is a simple, direct instruction (e.g., "Post this banner on LinkedIn", "Reply to this email"), DO NOT dispatch the Researcher or Strategist. Skip directly to DISPATCH_CONTENT_DIRECTOR (to write the caption) or DISPATCH_PUBLISHER (to post it).
-    2. If the goal is a complex, multi-week campaign, you MUST dispatch the Researcher first, then the Strategist.
+    1. If `tasks` is 0, you MUST dispatch the STRATEGIST to create the execution tasks. The Content Director and Publisher cannot function without tasks.
+    2. If the goal is a complex, multi-week campaign, you should dispatch the RESEARCHER before the Strategist. If it's a simple post, you can skip Research and dispatch the Strategist immediately.
     3. Do not dispatch an agent if their phase is in 'Phases already dispatched this run'.
-    4. You are not a rigid state machine. Evaluate the actual text of the GOAL to determine if research or a full multi-task strategy plan is actually required.
-    5. If no tasks exist yet, and the goal is simple, dispatch the STRATEGIST but tell it to keep it simple, OR if content is already provided in the goal, you may need the Strategist to just format it into a task for the Publisher. Note: The Content Director and Publisher ONLY work if tasks exist in the task list. If tasks=0, you MUST use the STRATEGIST to create the execution tasks, but your reasoning should reflect why it's a quick plan vs a complex one.
+    4. You are not a rigid state machine. Evaluate the actual text of the GOAL to determine if research is actually required before strategy.
 
     Return ONLY valid JSON:
     {{
         "reasoning": "Step-by-step analysis of the GOAL complexity, current state, and why the chosen action is the absolute best next step.",
-        "action": "DISPATCH_RESEARCHER|DISPATCH_STRATEGIST|DISPATCH_CONTENT_DIRECTOR|DISPATCH_PUBLISHER|DISPATCH_SKILLFORGE|COMPLETE"
+        "action": "DISPATCH_RESEARCHER|DISPATCH_STRATEGIST|DISPATCH_CONTENT_DIRECTOR|DISPATCH_PUBLISHER|DISPATCH_SKILLFORGE|DISPATCH_MONITOR|COMPLETE"
     }}
     """
     return await generate_json(prompt, "You are the God Node, an omniscient autonomous swarm supervisor.")
@@ -286,6 +296,7 @@ async def _evaluate_state_and_decide(
 
 # ── Main Entry Point ───────────────────────────────────────────────────────────
 
+@_traceable(name="run_orchestration", run_type="chain")
 async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
     """
     Langclaw Orchestrator Hub — LLM-driven autonomous execution loop.
@@ -432,28 +443,6 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
                     break
                 elif res.get("status") == "ok":
                     failed_ids = list(set(res.get("failed_task_ids", [])))
-
-            elif action == "DISPATCH_MONITOR":
-                from agent.nodes.monitor import monitor_node
-                from agent.state import AgentState
-                slim_state: AgentState = {
-                    "goal_id": goal_id, "goal_description": goal_description,
-                    "created_by": user_id, "platforms": platforms,
-                    "messages": [], "research_findings": research_findings,
-                    "campaign_plan": campaign_plan, "tasks": tasks,
-                    "completed_task_ids": completed_ids, "failed_task_ids": failed_ids,
-                    "kpi_snapshot": {}, "needs_replan": False, "approval_status": "approved",
-                    "human_feedback": None, "new_skills_created": [], "next_agent": None,
-                    "target_agent": None, "risk_score": None, "error": None,
-                    "iteration_count": iteration, "asset_ids": asset_ids, "deadline": None,
-                    "success_metrics": {}, "constraints": {}, "content_swarm_results": [],
-                    "current_task_id": None,
-                }
-                res = await monitor_node(slim_state)
-                completed_phases.add("DISPATCH_MONITOR")
-                # Monitor could request a replan
-                if res.get("needs_replan"):
-                    completed_phases.discard("DISPATCH_STRATEGIST") # Allow strategist to run again
 
             elif action == "DISPATCH_MONITOR":
                 from agent.nodes.monitor import monitor_node
