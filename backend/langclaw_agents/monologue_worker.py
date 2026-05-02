@@ -195,7 +195,16 @@ async def _phase_execute_goals_parallel(now: datetime):
 
                 elif goal.status == "executing":
                     updated_at = _to_naive_utc(goal.updated_at)
-                    if updated_at and (now - updated_at).total_seconds() > 900:
+                    age_secs = (now - updated_at).total_seconds() if updated_at else 99999
+
+                    # Case A: Executing but has NO tasks — orchestrator got stuck early.
+                    # Retry the full orchestration run to restart from scratch.
+                    if (goal.tasks_total or 0) == 0 and age_secs > 600:
+                        logger.info(f"[Monologue] Goal {goal.id[:8]} stuck executing with 0 tasks ({age_secs/60:.1f}min) — forcing full retry")
+                        await _retry_planning(goal)
+
+                    # Case B: Has tasks but stale for >10min — push a status update
+                    elif age_secs > 600:
                         await _push_execution_status(goal)
             except Exception as e:
                 logger.error(f"[Monologue] Error handling goal {goal.id[:8]}: {e}")
@@ -238,6 +247,9 @@ async def _nudge_approval(goal, now: datetime):
 
 async def _push_execution_status(goal):
     from agent.chat_push import chat_push
+    from database import async_session, AgentLog
+    from sqlalchemy import select, desc
+
     pct = goal.progress_percent or 0
     done = goal.tasks_completed or 0
     total = goal.tasks_total or 0
@@ -250,7 +262,25 @@ async def _push_execution_status(goal):
             f"Campaign \"{goal.title}\" running — {pct:.0f}% ({done}/{total} tasks). "
             f"Scheduler is distributing posts throughout the day."
         )
-    
+
+    # ── Spam guard: skip if the exact same message was logged in the last 30min ──
+    try:
+        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        async with async_session() as session:
+            result = await session.execute(
+                select(AgentLog).where(
+                    AgentLog.goal_id == goal.id,
+                    AgentLog.agent == "monitor",
+                    AgentLog.thought == msg,
+                    AgentLog.created_at >= cutoff,
+                ).limit(1)
+            )
+            if result.scalar_one_or_none():
+                logger.debug(f"[Monologue] Suppressing duplicate monitor push for goal {goal.id[:8]}")
+                return
+    except Exception:
+        pass  # If spam-check fails, still send the message
+
     await chat_push(goal.created_by, msg, "monitor", goal.id)
 
 

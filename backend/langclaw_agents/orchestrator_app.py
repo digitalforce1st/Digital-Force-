@@ -21,6 +21,7 @@ import asyncio
 import logging
 import json
 import uuid
+from datetime import datetime
 from typing import Optional
 from pathlib import Path
 
@@ -483,11 +484,13 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
                     g = await session.get(Goal, goal_id)
                     if g:
                         campaign_plan["tasks"]              = tasks
-                        campaign_plan["research_findings"]  = research_findings  # persist research
+                        campaign_plan["research_findings"]  = research_findings
                         campaign_plan["completed_task_ids"] = completed_ids
                         g.plan            = json.dumps(campaign_plan)
                         g.tasks_total     = len(tasks)
                         g.tasks_completed = len(completed_ids)
+                        g.status          = "executing"  # Ensure status stays executing during run
+                        g.updated_at      = datetime.utcnow()  # Refresh so stale-detection is accurate
                         if tasks:
                             g.progress_percent = min((len(completed_ids) / len(tasks)) * 100, 99.9)
                         await session.commit()
@@ -501,8 +504,9 @@ async def run_orchestration(goal_id: str, trigger_source: str = "chat") -> dict:
 
     except Exception as fatal_e:
         logger.error(f"[Orchestrator Hub] Fatal exception: {fatal_e}", exc_info=True)
-        final_status = "executing"
-        await chat_push(user_id, f"Swarm encountered an issue and will auto-retry: {str(fatal_e)[:100]}", "orchestrator", goal_id)
+        # Reset to 'planning' so the monologue worker will retry on next cycle
+        final_status = "planning"
+        await chat_push(user_id, f"Swarm encountered an issue and will auto-retry shortly: {str(fatal_e)[:100]}", "orchestrator", goal_id)
 
     # Final status write
     try:
